@@ -1,0 +1,27 @@
+# HA nabídne aktualizaci, jen když se tu zvýší verze. Appka si verzi
+# čte odsud, takže je na jednom místě.
+name: MAT-Cooking
+version: "0.1.0"
+slug: mat_cooking
+description: Recepty a plán vaření -- chybějící suroviny rovnou do nákupního seznamu HA
+url: https://github.com/qouzelnik04/MAT-Cooking
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+
+# Přístup jen přes HA (přihlášení HA, funguje i vzdáleně). Žádný port ven.
+ingress: true
+ingress_port: 8720
+panel_icon: mdi:chef-hat
+panel_title: Vaření
+# Recepty jsou společné pro celou domácnost -- panel vidí i uživatelé bez admin práv
+panel_admin: false
+
+# Zápis chybějících surovin do seznamů úkolů HA (nákupní seznamy)
+homeassistant_api: true
+
+# Databáze (SQLite) je v /data. Při záloze se add-on na chvíli zastaví,
+# aby se nezálohovala rozepsaná databáze.
+backup: cold

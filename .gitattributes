@@ -1,0 +1,3 @@
+# Kód běží v Linuxu (HA) -- unixové konce řádků; batch soubory windowsové
+* text=auto eol=lf
+*.bat text eol=crlf

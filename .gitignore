@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+# lokální data při vývoji (START.bat) -- ostrá data jsou v HA
+devdata/
+*.tmp
+Thumbs.db
+.DS_Store

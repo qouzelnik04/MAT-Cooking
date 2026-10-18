@@ -1,0 +1,114 @@
+/* Mobil na prvním místě -- recepty se čtou v kuchyni z telefonu.
+   Barvy podle systému (světlý / tmavý), stejně jako HA. */
+:root {
+  --bg: #f6f6f4; --card: #fff; --text: #1d1d1b; --muted: #6b6b66;
+  --line: #e2e1dc; --accent: #c4512b; --accent-text: #fff;
+  --ok: #2f7a4b; --bad: #b3261e; --chip: #efeee9;
+  --radius: 12px;
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --card: #22221f; --text: #ecebe6; --muted: #a3a29b;
+    --line: #36352f; --accent: #e07a52; --chip: #2d2c28;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+a { color: inherit; }
+
+.top {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 700; font-size: 18px; }
+.ver { font-weight: 400; font-size: 12px; color: var(--muted); }
+.tabs { display: flex; gap: 4px; }
+.tabs a {
+  text-decoration: none; padding: 6px 12px; border-radius: 999px; color: var(--muted);
+}
+.tabs a.on { background: var(--chip); color: var(--text); font-weight: 600; }
+
+main { max-width: 820px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 24px; margin: 4px 0 8px; }
+h2 { font-size: 17px; margin: 22px 0 8px; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1; }
+
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 16px; margin: 10px 0;
+}
+.list { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.recipe {
+  display: block; text-decoration: none; background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px;
+}
+.recipe:hover { border-color: var(--accent); }
+.recipe b { display: block; font-size: 16px; margin-bottom: 2px; }
+
+.chip {
+  display: inline-block; padding: 2px 10px; border-radius: 999px;
+  background: var(--chip); font-size: 13px; color: var(--muted);
+}
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.chips button { border: 0; padding: 6px 12px; border-radius: 999px; background: var(--chip);
+                color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
+.chips button.on { background: var(--accent); color: var(--accent-text); }
+
+button.btn, a.btn {
+  font: inherit; font-size: 15px; padding: 9px 16px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--card); color: var(--text);
+  cursor: pointer; text-decoration: none; display: inline-block;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn.danger { color: var(--bad); }
+.btn.small { padding: 5px 10px; font-size: 14px; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+input, select, textarea {
+  font: inherit; font-size: 16px;      /* 16px = iPhone nezoomuje při psaní */
+  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--card); color: var(--text); width: 100%;
+}
+textarea { min-height: 140px; resize: vertical; }
+label.field { display: block; margin: 12px 0; }
+label.field > span { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+
+/* Suroviny v receptu */
+.ingredients { list-style: none; padding: 0; margin: 0; }
+.ingredients li { display: flex; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.ingredients li:last-child { border-bottom: 0; }
+.ingredients .qty { min-width: 92px; text-align: right; font-variant-numeric: tabular-nums;
+                    font-weight: 600; }
+.steps { padding-left: 22px; margin: 0; }
+.steps li { margin: 6px 0; }
+
+.stepper { display: inline-flex; align-items: center; gap: 4px; }
+.stepper button { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line);
+                  background: var(--card); color: var(--text); font-size: 20px; cursor: pointer; }
+.stepper b { min-width: 36px; text-align: center; font-size: 18px; }
+
+/* Editor surovin: na mobilu pod sebou, na širší obrazovce v řádku */
+.item-row { display: grid; gap: 6px; grid-template-columns: 90px 110px 1fr auto;
+            align-items: center; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+.item-row .note { grid-column: 1 / -1; }
+@media (max-width: 520px) {
+  .item-row { grid-template-columns: 80px 100px 1fr; }
+  .item-row .tools { grid-column: 1 / -1; justify-self: end; }
+}
+.tools { display: flex; gap: 4px; }
+
+table { width: 100%; border-collapse: collapse; }
+td, th { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+td.num { text-align: right; }
+
+.error { color: var(--bad); }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 9; }
+#toast div { background: var(--text); color: var(--bg); padding: 10px 16px;
+             border-radius: 10px; margin-top: 6px; box-shadow: 0 4px 16px #0003; }

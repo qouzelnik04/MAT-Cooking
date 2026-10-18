@@ -1,0 +1,5 @@
+# Repozitář doplňků pro Home Assistant.
+# V HA: Nastavení -> Doplňky -> Obchod s doplňky -> ⋮ -> Repozitáře -> přidat
+# https://github.com/qouzelnik04/MAT-Cooking
+name: MAT doplňky
+url: https://github.com/qouzelnik04/MAT-Cooking

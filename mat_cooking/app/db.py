@@ -1,0 +1,214 @@
+"""
+Databáze (SQLite, součást Pythonu) -- recepty a katalog surovin.
+
+Katalog surovin je společný pro všechny recepty: "cibule" je jedna surovina,
+ať je v kolika receptech chce. Jen tak jde později sečíst, kolik cibule je
+potřeba na celý týden. Přejmenování suroviny na název, který už existuje,
+obě sloučí -- tak se uklidí "cibule" vs. "cibulka".
+
+Množství se ukládá jako text (Decimal), ne jako float.
+Schéma se verzuje přes PRAGMA user_version -- nová verze = nová migrace
+v MIGRATIONS, stará data zůstanou.
+"""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+import threading
+from datetime import datetime, timezone
+
+from .units import UNITS, fmt, parse_amount
+
+CATEGORIES = {
+    "snidane": "Snídaně",
+    "hlavni": "Hlavní jídlo",
+    "polevka": "Polévka",
+    "svacina": "Svačina",
+    "dezert": "Dezert",
+    "jine": "Jiné",
+}
+
+MIGRATIONS = [
+    # 1: recepty, suroviny
+    """
+    CREATE TABLE ingredients (
+        id    INTEGER PRIMARY KEY,
+        name  TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        unit  TEXT NOT NULL DEFAULT 'g'
+    );
+    CREATE TABLE recipes (
+        id        INTEGER PRIMARY KEY,
+        name      TEXT NOT NULL,
+        category  TEXT NOT NULL DEFAULT 'hlavni',
+        servings  INTEGER NOT NULL DEFAULT 1,
+        steps     TEXT NOT NULL DEFAULT '',
+        notes     TEXT NOT NULL DEFAULT '',
+        created   TEXT NOT NULL,
+        updated   TEXT NOT NULL
+    );
+    CREATE TABLE recipe_items (
+        id            INTEGER PRIMARY KEY,
+        recipe_id     INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+        ingredient_id INTEGER NOT NULL REFERENCES ingredients(id),
+        amount        TEXT NOT NULL DEFAULT '',
+        unit          TEXT NOT NULL DEFAULT '',
+        note          TEXT NOT NULL DEFAULT '',
+        pos           INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX recipe_items_recipe ON recipe_items(recipe_id);
+    """,
+]
+
+
+class InputError(Exception):
+    """Chyba ve vstupu od uživatele -- jde do UI jako srozumitelná hláška."""
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+class DB:
+    def __init__(self, data_dir: str):
+        os.makedirs(data_dir, exist_ok=True)
+        self.path = os.path.join(data_dir, "cooking.db")
+        self._con = sqlite3.connect(self.path, check_same_thread=False)
+        self._con.row_factory = sqlite3.Row
+        self._con.execute("PRAGMA foreign_keys = ON")
+        # Zápisy jdou přes jeden zámek -- appku používají dva lidé, ne tisíce
+        self.lock = threading.Lock()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        ver = self._con.execute("PRAGMA user_version").fetchone()[0]
+        for i, sql in enumerate(MIGRATIONS[ver:], start=ver + 1):
+            with self._con:
+                self._con.executescript(sql)
+                self._con.execute(f"PRAGMA user_version = {i}")
+
+    # ------------------------------------------------------------------
+    # Recepty
+    # ------------------------------------------------------------------
+    def list_recipes(self) -> list[dict]:
+        with self.lock:
+            rows = self._con.execute(
+                "SELECT r.id, r.name, r.category, r.servings, "
+                "(SELECT COUNT(*) FROM recipe_items i WHERE i.recipe_id = r.id) AS items "
+                "FROM recipes r ORDER BY r.name COLLATE NOCASE").fetchall()
+        return [dict(r) for r in rows]
+
+    def get_recipe(self, rid: int) -> dict | None:
+        with self.lock:
+            r = self._con.execute("SELECT * FROM recipes WHERE id = ?", (rid,)).fetchone()
+            if not r:
+                return None
+            items = self._con.execute(
+                "SELECT i.amount, i.unit, i.note, g.name AS ingredient, "
+                "g.id AS ingredient_id FROM recipe_items i "
+                "JOIN ingredients g ON g.id = i.ingredient_id "
+                "WHERE i.recipe_id = ? ORDER BY i.pos", (rid,)).fetchall()
+        return {**dict(r), "items": [dict(i) for i in items]}
+
+    def save_recipe(self, data: dict) -> int:
+        """Nový recept (bez id) nebo úprava existujícího. Vrací id."""
+        name = str(data.get("name") or "").strip()
+        if not name:
+            raise InputError("Recept musí mít název.")
+        category = data.get("category") if data.get("category") in CATEGORIES else "jine"
+        try:
+            servings = max(1, int(data.get("servings") or 1))
+        except (TypeError, ValueError):
+            raise InputError("Počet porcí musí být celé číslo.") from None
+
+        items = []
+        for pos, it in enumerate(data.get("items") or []):
+            ing = str(it.get("ingredient") or "").strip()
+            if not ing:
+                continue
+            raw = str(it.get("amount") or "").strip()
+            amount = parse_amount(raw)
+            if raw and amount is None:
+                raise InputError(f"'{raw}' u suroviny {ing} není množství "
+                                 f"(např. 200, 1,5 nebo 1/2).")
+            unit = str(it.get("unit") or "").strip()
+            if unit and unit not in UNITS:
+                raise InputError(f"Neznámá jednotka '{unit}' u suroviny {ing}.")
+            items.append((ing, fmt(amount) if amount else "", unit,
+                          str(it.get("note") or "").strip(), pos))
+
+        with self.lock, self._con:
+            rid = data.get("id")
+            fields = (name, category, servings, str(data.get("steps") or "").strip(),
+                      str(data.get("notes") or "").strip())
+            if rid:
+                cur = self._con.execute(
+                    "UPDATE recipes SET name=?, category=?, servings=?, steps=?, notes=?, "
+                    "updated=? WHERE id=?", (*fields, _now(), int(rid)))
+                if not cur.rowcount:
+                    raise InputError("Tenhle recept už neexistuje.")
+                rid = int(rid)
+                self._con.execute("DELETE FROM recipe_items WHERE recipe_id=?", (rid,))
+            else:
+                rid = self._con.execute(
+                    "INSERT INTO recipes (name, category, servings, steps, notes, "
+                    "created, updated) VALUES (?,?,?,?,?,?,?)",
+                    (*fields, _now(), _now())).lastrowid
+            for ing, amount, unit, note, pos in items:
+                iid = self._ingredient_id(ing, unit)
+                self._con.execute(
+                    "INSERT INTO recipe_items (recipe_id, ingredient_id, amount, unit, "
+                    "note, pos) VALUES (?,?,?,?,?,?)", (rid, iid, amount, unit, note, pos))
+        return rid
+
+    def delete_recipe(self, rid: int) -> None:
+        with self.lock, self._con:
+            self._con.execute("DELETE FROM recipes WHERE id=?", (rid,))
+
+    # ------------------------------------------------------------------
+    # Suroviny
+    # ------------------------------------------------------------------
+    def _ingredient_id(self, name: str, unit: str) -> int:
+        row = self._con.execute("SELECT id FROM ingredients WHERE name = ?",
+                                (name,)).fetchone()
+        if row:
+            return row["id"]
+        return self._con.execute("INSERT INTO ingredients (name, unit) VALUES (?, ?)",
+                                 (name, unit or "g")).lastrowid
+
+    def list_ingredients(self) -> list[dict]:
+        with self.lock:
+            rows = self._con.execute(
+                "SELECT g.id, g.name, g.unit, COUNT(DISTINCT i.recipe_id) AS used "
+                "FROM ingredients g LEFT JOIN recipe_items i ON i.ingredient_id = g.id "
+                "GROUP BY g.id ORDER BY g.name COLLATE NOCASE").fetchall()
+        return [dict(r) for r in rows]
+
+    def rename_ingredient(self, iid: int, new_name: str) -> str:
+        """Přejmenuje surovinu. Když nový název už existuje, sloučí je.
+
+        Vrací 'renamed' nebo 'merged'.
+        """
+        new_name = new_name.strip()
+        if not new_name:
+            raise InputError("Surovina musí mít název.")
+        with self.lock, self._con:
+            other = self._con.execute(
+                "SELECT id FROM ingredients WHERE name = ? AND id != ?",
+                (new_name, iid)).fetchone()
+            if other:
+                self._con.execute("UPDATE recipe_items SET ingredient_id=? "
+                                  "WHERE ingredient_id=?", (other["id"], iid))
+                self._con.execute("DELETE FROM ingredients WHERE id=?", (iid,))
+                return "merged"
+            self._con.execute("UPDATE ingredients SET name=? WHERE id=?", (new_name, iid))
+            return "renamed"
+
+    def delete_ingredient(self, iid: int) -> None:
+        with self.lock, self._con:
+            used = self._con.execute("SELECT COUNT(*) FROM recipe_items "
+                                     "WHERE ingredient_id=?", (iid,)).fetchone()[0]
+            if used:
+                raise InputError("Surovina je v receptech, smazat ji nejde. "
+                                 "Můžeš ji přejmenovat a tím sloučit s jinou.")
+            self._con.execute("DELETE FROM ingredients WHERE id=?", (iid,))
