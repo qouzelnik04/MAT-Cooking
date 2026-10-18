@@ -17,6 +17,14 @@ domácnost. Chybějící suroviny půjdou rovnou do nákupních seznamů v HA.
 GitHub nabídne HA aktualizaci sám (Obchod s doplňky → ⋮ → Zkontrolovat
 aktualizace).
 
+## Nákupní seznamy
+
+Appka posílá chybějící suroviny do **seznamů úkolů v HA** (integrace Local
+To-do, jeden záznam = jeden obchod: Albert, Billa, Kaufland…). Add-on k tomu
+má `homeassistant_api: true` a token mu HA dá sám. Co už v seznamu
+nevyřízené je, se nepřidá podruhé. U položky je v popisu, pro které recepty
+je.
+
 ## Vývoj na notebooku
 
 Dvojklik na `START.bat` spustí appku lokálně na `http://127.0.0.1:8720` nad
@@ -28,7 +36,7 @@ nic se neinstaluje.
 | Krok | Obsah | Stav |
 |---|---|---|
 | 1 | Recepty, katalog surovin, přepočet porcí | hotovo |
-| 2 | Plán vaření: výběr receptů a porcí, sečtení surovin, „mám doma“, odeslání do nákupního seznamu HA | |
+| 2 | Plán vaření: výběr receptů a porcí, sečtení surovin, „mám doma“, odeslání do nákupního seznamu HA | hotovo |
 | 3 | Lednice a mrazák, upozornění | |
 
 ## Kde co je
@@ -42,6 +50,8 @@ mat_cooking/
     main.py                HTTP server (Ingress v HA, 127.0.0.1 lokálně)
     db.py                  SQLite: recepty, suroviny, migrace schématu
     units.py               jednotky, převody g/kg a ml/l, parsování množství
+    plan.py                plán -> sečtený nákupní seznam (kusy nahoru)
+    ha.py                  seznamy úkolů v HA (čtení, přidávání položek)
   web/                     UI (vanilla JS, mobil na prvním místě)
 START.bat                  lokální spuštění
 ```

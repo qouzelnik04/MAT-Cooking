@@ -65,15 +65,17 @@ function confirmButton(label, ask, action) {
 
 /* ============================================================== ROUTER */
 async function route() {
-  const [name, arg] = (location.hash.replace('#', '') || 'recepty').split('/');
+  const [name, arg] = (location.hash.replace('#', '') || 'plan').split('/');
+  const tab = ['suroviny', 'plan'].includes(name) ? name : 'recepty';
   document.querySelectorAll('.tabs a').forEach((a) =>
-    a.classList.toggle('on', a.dataset.tab === (name === 'suroviny' ? 'suroviny' : 'recepty')));
+    a.classList.toggle('on', a.dataset.tab === tab));
   const view = $('#view');
   try {
     if (name === 'recept') view.replaceChildren(await recipeView(+arg));
     else if (name === 'upravit') view.replaceChildren(await editView(+arg));
     else if (name === 'novy') view.replaceChildren(await editView(null));
     else if (name === 'suroviny') view.replaceChildren(await ingredientsView());
+    else if (name === 'plan') view.replaceChildren(await planView());
     else view.replaceChildren(await listView());
   } catch (e) {
     view.replaceChildren(el('p', { class: 'error' }, 'Chyba: ' + e.message));
@@ -227,6 +229,121 @@ async function editView(id) {
       el('label', { class: 'field' }, el('span', {}, 'Postup'), steps),
       el('label', { class: 'field' }, el('span', {}, 'Poznámky'), notes)),
     err, save);
+}
+
+/* ================================================================ PLÁN */
+/* Nedělní vaření: kolik porcí čeho -> sečtené suroviny -> co mám doma ->
+   zbytek do nákupního seznamu v HA. Plán je společný pro celou domácnost. */
+async function planView() {
+  const [recipes, plan] = await Promise.all([api('api/recipes'), api('api/plan')]);
+  let state = plan;
+  const portionsOf = () => Object.fromEntries(state.recipes.map((r) => [r.id, r.portions]));
+  const recipeBox = el('div', {});
+  const shopBox = el('div', {});
+  const filter = el('input', { type: 'search', placeholder: 'Hledat recept…' });
+
+  const setPortions = async (rid, n) => {
+    state = await api('api/plan/portions', { recipe_id: rid, portions: n });
+    paintRecipes(); paintShop();
+  };
+
+  const paintRecipes = () => {
+    const p = portionsOf();
+    const q = filter.value.toLowerCase();
+    // Vybrané nahoře, ostatní pod nimi
+    const list = recipes.filter((r) => !q || r.name.toLowerCase().includes(q))
+      .sort((a, b) => (p[b.id] ? 1 : 0) - (p[a.id] ? 1 : 0));
+    recipeBox.replaceChildren(...(list.length ? list.map((r) => {
+      const n = p[r.id] || 0;
+      return el('div', { class: 'plan-row' + (n ? ' on' : '') },
+        el('div', { class: 'spacer' }, el('b', {}, r.name), ' ',
+          el('span', { class: 'chip' }, catName(r.category))),
+        el('div', { class: 'stepper' },
+          el('button', { onclick: () => setPortions(r.id, Math.max(0, n - 1)),
+            disabled: !n, 'aria-label': 'méně porcí' }, '−'),
+          el('b', {}, n),
+          el('button', { onclick: () => setPortions(r.id, n + 1), 'aria-label': 'více porcí' }, '+')));
+    }) : [el('p', { class: 'muted' }, recipes.length ? 'Nic nenalezeno.'
+      : 'Nejdřív přidej recepty.')]));
+  };
+
+  const qtyText = (r) => (r.amount ? `${fmtAmount(parseFloat(r.amount))} ${r.unit}` : '');
+
+  const sendBox = (missing) => {
+    if (!missing.length) return el('p', {}, '✓ Všechno máš doma.');
+    if (!state.ha) {
+      const text = missing.map((r) => `${r.ingredient} ${qtyText(r)}`.trim()).join('\n');
+      return el('div', { style: 'margin-top:12px' },
+        el('p', { class: 'muted small' }, 'Appka neběží v Home Assistantu, takže seznam '
+          + 'neodešle. Můžeš ho zkopírovat:'),
+        el('textarea', { readonly: true, style: 'min-height:100px' }, text),
+        el('button', { class: 'btn', onclick: async () => {
+          await navigator.clipboard.writeText(text); toast('Zkopírováno.');
+        } }, 'Zkopírovat'));
+    }
+    const select = el('select', {}, el('option', { value: '' }, 'Načítám seznamy…'));
+    const send = el('button', { class: 'btn primary', disabled: true },
+      `Poslat ${missing.length} do seznamu`);
+    api('api/lists').then((res) => {
+      let last = '';
+      try { last = localStorage.getItem('mat-cooking-list') || ''; } catch (e) { /* nevadí */ }
+      select.replaceChildren(...(res.lists.length ? res.lists.map((l) =>
+        el('option', { value: l.entity_id, selected: l.entity_id === last }, l.name))
+        : [el('option', { value: '' }, 'V HA nejsou žádné seznamy úkolů')]));
+      send.disabled = !res.lists.length;
+    }).catch((e) => toast(e.message));
+    send.addEventListener('click', async () => {
+      send.disabled = true;
+      try {
+        try { localStorage.setItem('mat-cooking-list', select.value); } catch (e) { /* nevadí */ }
+        const res = await api('api/plan/send', { entity_id: select.value });
+        const name = select.options[select.selectedIndex].text;
+        toast(`Do seznamu ${name} přidáno ${res.added.length}`
+          + (res.skipped.length ? `, ${res.skipped.length} už tam bylo` : '') + '.');
+      } catch (e) { toast(e.message); } finally { send.disabled = false; }
+    });
+    return el('div', { class: 'row', style: 'margin-top:12px' }, select, send);
+  };
+
+  const paintShop = () => {
+    const rows = state.shopping;
+    if (!rows.length) {
+      shopBox.replaceChildren(el('p', { class: 'muted' },
+        'Vyber nahoře, co budeš vařit a kolik porcí — suroviny se tu sečtou.'));
+      return;
+    }
+    const missing = rows.filter((r) => !r.have);
+    shopBox.replaceChildren(
+      el('p', { class: 'muted small' }, `Chybí ${missing.length} z ${rows.length}. `
+        + 'Zaškrtni, co máš doma.'),
+      el('ul', { class: 'shop' }, ...rows.map((r) => {
+        const cb = el('input', { type: 'checkbox' });
+        cb.checked = r.have;
+        cb.addEventListener('change', async () => {
+          r.have = cb.checked;
+          await api('api/plan/have', { key: r.key, have: r.have });
+          paintShop();
+        });
+        return el('li', { class: r.have ? 'have' : '' },
+          el('label', {}, cb,
+            el('span', { class: 'qty' }, qtyText(r)),
+            el('span', {}, r.ingredient,
+              el('span', { class: 'muted small' }, ' · ' + r.recipes.join(', ')))));
+      })),
+      sendBox(missing));
+  };
+
+  filter.addEventListener('input', paintRecipes);
+  paintRecipes(); paintShop();
+  return el('div', {},
+    el('div', { class: 'row' }, el('h1', {}, 'Plán vaření'), el('div', { class: 'spacer' }),
+      confirmButton('Vyčistit plán', 'Opravdu vyčistit?', async () => {
+        state = await api('api/plan/clear', {});
+        paintRecipes(); paintShop(); toast('Plán vyčištěn.');
+      })),
+    el('div', { class: 'card' }, el('h2', { style: 'margin-top:0' }, 'Co budu vařit'),
+      filter, recipeBox),
+    el('div', { class: 'card' }, el('h2', { style: 'margin-top:0' }, 'Nákup'), shopBox));
 }
 
 /* ============================================================ SUROVINY */

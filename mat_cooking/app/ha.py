@@ -1,0 +1,86 @@
+"""
+Napojení na Home Assistant -- seznamy úkolů (nákupní seznamy).
+
+Add-on má v config.yaml `homeassistant_api: true`, takže od HA dostane
+token v proměnné SUPERVISOR_TOKEN a API HA je na http://supervisor/core/api.
+Nic se nenastavuje ručně. Lokálně (START.bat) token není a appka nákupní
+seznam místo odeslání nabídne ke zkopírování.
+
+MAT_HA_URL a MAT_HA_TOKEN jsou jen pro testy (falešné HA).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import urllib.error
+import urllib.request
+
+BASE = os.environ.get("MAT_HA_URL") or "http://supervisor/core/api"
+TOKEN = os.environ.get("MAT_HA_TOKEN") or os.environ.get("SUPERVISOR_TOKEN") or ""
+
+
+class HAError(Exception):
+    pass
+
+
+def available() -> bool:
+    return bool(TOKEN)
+
+
+def _call(method: str, path: str, body=None):
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(
+        BASE + path, data=data, method=method,
+        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            raw = r.read()
+            return json.loads(raw) if raw else None
+    except urllib.error.HTTPError as exc:
+        raise HAError(f"Home Assistant odpověděl chybou {exc.code} ({path}).") from exc
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise HAError(f"Home Assistant není dostupný: {exc}") from exc
+
+
+def todo_lists() -> list[dict]:
+    """Všechny seznamy úkolů v HA: [{entity_id, name}]."""
+    states = _call("GET", "/states") or []
+    out = [{"entity_id": s["entity_id"],
+            "name": (s.get("attributes") or {}).get("friendly_name") or s["entity_id"]}
+           for s in states if s.get("entity_id", "").startswith("todo.")]
+    return sorted(out, key=lambda x: x["name"].lower())
+
+
+def _open_items(entity_id: str) -> set[str] | None:
+    """Texty nevyřízených položek seznamu; None = nejde zjistit."""
+    try:
+        res = _call("POST", "/services/todo/get_items?return_response",
+                    {"entity_id": entity_id, "status": ["needs_action"]})
+    except HAError:
+        return None
+    items = ((res or {}).get("service_response") or {}).get(entity_id, {}).get("items", [])
+    return {str(i.get("summary", "")).strip().lower() for i in items}
+
+
+def add_items(entity_id: str, items: list[tuple[str, str]]) -> dict:
+    """Přidá položky (text, popis) do seznamu. Co tam už nevyřízené je, přeskočí."""
+    if not entity_id.startswith("todo."):
+        raise HAError("Neplatný seznam.")
+    existing = _open_items(entity_id)
+    added, skipped = [], []
+    for text, description in items:
+        if existing is not None and text.strip().lower() in existing:
+            skipped.append(text)
+            continue
+        body = {"entity_id": entity_id, "item": text}
+        try:
+            _call("POST", "/services/todo/add_item",
+                  {**body, "description": description} if description else body)
+        except HAError:
+            if not description:
+                raise
+            # Ne každý seznam umí popis položky -- pak aspoň bez něj
+            _call("POST", "/services/todo/add_item", body)
+        added.append(text)
+    return {"added": added, "skipped": skipped, "checked": existing is not None}

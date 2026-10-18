@@ -112,3 +112,20 @@ td.num { text-align: right; }
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 9; }
 #toast div { background: var(--text); color: var(--bg); padding: 10px 16px;
              border-radius: 10px; margin-top: 6px; box-shadow: 0 4px 16px #0003; }
+
+/* Plán vaření */
+.plan-row { display: flex; align-items: center; gap: 10px; padding: 8px 0;
+            border-bottom: 1px solid var(--line); }
+.plan-row:last-child { border-bottom: 0; }
+.plan-row:not(.on) b { font-weight: 500; }
+.plan-row:not(.on) .stepper b { color: var(--muted); }
+.stepper button:disabled { opacity: .35; cursor: default; }
+.shop { list-style: none; padding: 0; margin: 0; }
+.shop li { border-bottom: 1px solid var(--line); }
+.shop li:last-child { border-bottom: 0; }
+.shop label { display: flex; gap: 10px; align-items: center; padding: 9px 0; cursor: pointer; }
+.shop input { width: 22px; height: 22px; flex: none; accent-color: var(--accent); }
+.shop .qty { min-width: 80px; text-align: right; font-weight: 600;
+             font-variant-numeric: tabular-nums; }
+.shop li.have .qty, .shop li.have span { text-decoration: line-through; color: var(--muted); }
+.row select { width: auto; flex: 1; min-width: 160px; }

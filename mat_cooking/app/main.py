@@ -26,8 +26,9 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import APP_NAME, APP_VERSION
+from . import APP_NAME, APP_VERSION, ha
 from .db import CATEGORIES, DB, InputError
+from .plan import item_text, shopping_list
 from .units import UNITS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -86,7 +87,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(r) if r else self._err(404, "Recept neexistuje.")
             if path == "/api/ingredients":
                 return self._json(DATA.list_ingredients())
+            if path == "/api/plan":
+                return self._json(_plan())
+            if path == "/api/lists":
+                if not ha.available():
+                    return self._json({"available": False, "lists": []})
+                return self._json({"available": True, "lists": ha.todo_lists()})
             return self._err(404, "Taková adresa tu není.")
+        except ha.HAError as exc:
+            return self._err(502, str(exc))
         except Exception as exc:            # noqa: BLE001
             traceback.print_exc()
             return self._err(500, f"Chyba na serveru: {exc}")
@@ -111,9 +120,22 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 DATA.delete_ingredient(int(m.group(1)))
                 return self._json({"ok": True})
+            if path == "/api/plan/portions":
+                DATA.set_portions(int(body.get("recipe_id")), max(0, int(body.get("portions") or 0)))
+                return self._json(_plan())
+            if path == "/api/plan/have":
+                DATA.set_have(str(body.get("key") or ""), bool(body.get("have")))
+                return self._json({"ok": True})
+            if path == "/api/plan/clear":
+                DATA.clear_plan()
+                return self._json(_plan())
+            if path == "/api/plan/send":
+                return self._json(_send(str(body.get("entity_id") or "")))
             return self._err(404, "Taková adresa tu není.")
         except InputError as exc:
             return self._err(400, str(exc))
+        except ha.HAError as exc:
+            return self._err(502, str(exc))
         except Exception as exc:            # noqa: BLE001
             traceback.print_exc()
             return self._err(500, f"Chyba na serveru: {exc}")
@@ -168,6 +190,23 @@ class Handler(BaseHTTPRequestHandler):
     def _err(self, code: int, msg: str) -> None:
         self._raw(json.dumps({"error": msg}, ensure_ascii=False).encode("utf-8"),
                   "application/json; charset=utf-8", code)
+
+
+def _plan() -> dict:
+    recipes, items, have = DATA.plan_rows()
+    return {"recipes": recipes, "shopping": shopping_list(recipes, items, have),
+            "ha": ha.available()}
+
+
+def _send(entity_id: str) -> dict:
+    """Chybějící suroviny z plánu do nákupního seznamu v HA."""
+    if not ha.available():
+        raise InputError("Appka neběží v Home Assistantu -- seznam zkopíruj ručně.")
+    rows = [r for r in _plan()["shopping"] if not r["have"]]
+    if not rows:
+        raise InputError("Nic nechybí -- všechno máš doma.")
+    return ha.add_items(entity_id, [(item_text(r), "Pro: " + ", ".join(r["recipes"]))
+                                    for r in rows])
 
 
 def _free_port(preferred: int) -> int:

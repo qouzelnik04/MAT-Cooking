@@ -58,6 +58,16 @@ MIGRATIONS = [
     );
     CREATE INDEX recipe_items_recipe ON recipe_items(recipe_id);
     """,
+    # 2: plán vaření (společný pro domácnost) a co už je doma
+    """
+    CREATE TABLE plan (
+        recipe_id  INTEGER PRIMARY KEY REFERENCES recipes(id) ON DELETE CASCADE,
+        portions   INTEGER NOT NULL
+    );
+    CREATE TABLE plan_have (
+        key  TEXT PRIMARY KEY          -- surovina|skupina jednotek, viz plan.py
+    );
+    """,
 ]
 
 
@@ -203,6 +213,46 @@ class DB:
                 return "merged"
             self._con.execute("UPDATE ingredients SET name=? WHERE id=?", (new_name, iid))
             return "renamed"
+
+    # ------------------------------------------------------------------
+    # Plán vaření
+    # ------------------------------------------------------------------
+    def plan_rows(self) -> tuple[list[dict], list[dict], set[str]]:
+        """(recepty v plánu, jejich suroviny, klíče 'mám doma')."""
+        with self.lock:
+            recipes = self._con.execute(
+                "SELECT r.id, r.name, r.category, r.servings, p.portions "
+                "FROM plan p JOIN recipes r ON r.id = p.recipe_id "
+                "ORDER BY r.name COLLATE NOCASE").fetchall()
+            items = self._con.execute(
+                "SELECT i.recipe_id, i.amount, i.unit, g.id AS ingredient_id, "
+                "g.name AS ingredient FROM recipe_items i "
+                "JOIN ingredients g ON g.id = i.ingredient_id "
+                "WHERE i.recipe_id IN (SELECT recipe_id FROM plan)").fetchall()
+            have = {r["key"] for r in self._con.execute("SELECT key FROM plan_have")}
+        return [dict(r) for r in recipes], [dict(i) for i in items], have
+
+    def set_portions(self, rid: int, portions: int) -> None:
+        with self.lock, self._con:
+            if portions > 0:
+                self._con.execute(
+                    "INSERT INTO plan (recipe_id, portions) VALUES (?, ?) "
+                    "ON CONFLICT(recipe_id) DO UPDATE SET portions = excluded.portions",
+                    (rid, portions))
+            else:
+                self._con.execute("DELETE FROM plan WHERE recipe_id = ?", (rid,))
+
+    def set_have(self, key: str, have: bool) -> None:
+        with self.lock, self._con:
+            if have:
+                self._con.execute("INSERT OR IGNORE INTO plan_have (key) VALUES (?)", (key,))
+            else:
+                self._con.execute("DELETE FROM plan_have WHERE key = ?", (key,))
+
+    def clear_plan(self) -> None:
+        with self.lock, self._con:
+            self._con.execute("DELETE FROM plan")
+            self._con.execute("DELETE FROM plan_have")
 
     def delete_ingredient(self, iid: int) -> None:
         with self.lock, self._con:

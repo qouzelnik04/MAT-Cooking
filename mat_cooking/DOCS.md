@@ -6,6 +6,9 @@ Recepty a plán vaření pro celou domácnost.
 
 Otevři **Vaření** v postranním panelu HA.
 
+- **Plán** — u receptů nastavíš, kolik porcí uvaříš. Suroviny se sečtou,
+  zaškrtneš, co máš doma, a zbytek pošleš do nákupního seznamu (seznamy
+  úkolů HA, např. Albert, Billa). Plán je společný pro celou domácnost.
 - **Recepty** — přidávání receptů se surovinami (množství + jednotka +
   surovina), postupem a poznámkami. V detailu receptu jde přepočítat počet
   porcí tlačítky −/+.
