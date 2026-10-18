@@ -23,6 +23,7 @@ import re
 import socket
 import threading
 import traceback
+import unicodedata
 import urllib.parse
 import webbrowser
 from decimal import Decimal
@@ -95,7 +96,9 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 return self._photo(int(m.group(1)), "small" in self.path)
             if path == "/api/export":
-                return self._export()
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                rid = q.get("id", [""])[0]
+                return self._export(int(rid) if rid.isdigit() else None)
             if path == "/api/ingredients":
                 return self._json(DATA.list_ingredients())
             if path == "/api/plan":
@@ -202,8 +205,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _export(self) -> None:
-        recipes = DATA.export_recipes()
+    def _export(self, rid: int | None) -> None:
+        """Soubor s recepty (všemi, nebo jedním) pro import na jiném HA."""
+        recipes = DATA.export_recipes(rid)
+        if rid is not None and not recipes:
+            return self._err(404, "Recept neexistuje.")
         for r in recipes:
             rid, has = r.pop("_id"), r.pop("_photo")
             if has:
@@ -213,7 +219,8 @@ class Handler(BaseHTTPRequestHandler):
                     r["photo_small"] = base64.b64encode(fh.read()).decode()
         body = json.dumps({"format": "mat-cooking", "version": 1, "recipes": recipes},
                           ensure_ascii=False, indent=1).encode("utf-8")
-        name = f"mat-cooking-recepty-{date.today().isoformat()}.json"
+        name = (f"mat-cooking-{_slug(recipes[0]['name'])}.json" if rid is not None
+                else f"mat-cooking-recepty-{date.today().isoformat()}.json")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Disposition", f'attachment; filename="{name}"')
@@ -258,6 +265,14 @@ class Handler(BaseHTTPRequestHandler):
     def _err(self, code: int, msg: str) -> None:
         self._raw(json.dumps({"error": msg}, ensure_ascii=False).encode("utf-8"),
                   "application/json; charset=utf-8", code)
+
+
+def _slug(text: str) -> str:
+    """'Pizza žemle' -> 'pizza-zemle'. Název souboru v hlavičce musí být
+    bez diakritiky (HTTP hlavička je latin-1)."""
+    plain = unicodedata.normalize("NFD", text)
+    plain = "".join(c for c in plain if unicodedata.category(c) != "Mn").lower()
+    return re.sub(r"[^a-z0-9]+", "-", plain).strip("-") or "recept"
 
 
 def _b64(value) -> bytes:

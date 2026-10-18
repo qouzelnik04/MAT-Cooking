@@ -201,6 +201,8 @@ async function recipeView(id, planned) {
       el('p', { style: 'white-space:pre-wrap;margin:0' }, r.notes)) : null,
     el('div', { class: 'row', style: 'margin-top:16px' },
       el('a', { class: 'btn', href: `#upravit/${r.id}` }, 'Upravit'),
+      el('a', { class: 'btn', href: `api/export?id=${r.id}`, download: '',
+        title: 'Soubor s tímhle receptem (i fotkou) pro import na jiném HA' }, '⇩ Export'),
       el('div', { class: 'spacer' }),
       confirmButton('Smazat', 'Opravdu smazat?', async () => {
         await api(`api/recipes/${r.id}/delete`, {});

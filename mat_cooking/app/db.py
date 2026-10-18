@@ -234,9 +234,12 @@ class DB:
     # ------------------------------------------------------------------
     # Export / import -- sdílení receptů mezi instalacemi HA
     # ------------------------------------------------------------------
-    def export_recipes(self) -> list[dict]:
+    def export_recipes(self, rid: int | None = None) -> list[dict]:
+        """Všechny recepty, nebo jen jeden (rid)."""
         out = []
         for r in self.list_recipes():
+            if rid is not None and r["id"] != rid:
+                continue
             full = self.get_recipe(r["id"])
             out.append({k: full[k] for k in ("name", "category", "servings", "minutes",
                                              "steps", "notes")}
