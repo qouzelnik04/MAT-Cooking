@@ -52,35 +52,38 @@ def todo_lists() -> list[dict]:
     return sorted(out, key=lambda x: x["name"].lower())
 
 
-def _open_items(entity_id: str) -> set[str] | None:
-    """Texty nevyřízených položek seznamu; None = nejde zjistit."""
+def open_items(entity_id: str) -> list[dict] | None:
+    """Nevyřízené položky seznamu [{summary, uid, description}]; None = nejde zjistit."""
+    if not entity_id.startswith("todo."):
+        raise HAError("Neplatný seznam.")
     try:
         res = _call("POST", "/services/todo/get_items?return_response",
                     {"entity_id": entity_id, "status": ["needs_action"]})
     except HAError:
         return None
-    items = ((res or {}).get("service_response") or {}).get(entity_id, {}).get("items", [])
-    return {str(i.get("summary", "")).strip().lower() for i in items}
+    return ((res or {}).get("service_response") or {}).get(entity_id, {}).get("items", [])
 
 
-def add_items(entity_id: str, items: list[tuple[str, str]]) -> dict:
-    """Přidá položky (text, popis) do seznamu. Co tam už nevyřízené je, přeskočí."""
-    if not entity_id.startswith("todo."):
-        raise HAError("Neplatný seznam.")
-    existing = _open_items(entity_id)
-    added, skipped = [], []
-    for text, description in items:
-        if existing is not None and text.strip().lower() in existing:
-            skipped.append(text)
-            continue
-        body = {"entity_id": entity_id, "item": text}
-        try:
-            _call("POST", "/services/todo/add_item",
-                  {**body, "description": description} if description else body)
-        except HAError:
-            if not description:
-                raise
-            # Ne každý seznam umí popis položky -- pak aspoň bez něj
-            _call("POST", "/services/todo/add_item", body)
-        added.append(text)
-    return {"added": added, "skipped": skipped, "checked": existing is not None}
+def add_item(entity_id: str, text: str, description: str) -> None:
+    body = {"entity_id": entity_id, "item": text}
+    try:
+        _call("POST", "/services/todo/add_item",
+              {**body, "description": description} if description else body)
+    except HAError:
+        if not description:
+            raise
+        # Ne každý seznam umí popis položky -- pak aspoň bez něj
+        _call("POST", "/services/todo/add_item", body)
+
+
+def update_item(entity_id: str, item: dict, text: str, description: str) -> None:
+    """Přepíše existující položku (navýšení množství)."""
+    body = {"entity_id": entity_id, "item": item.get("uid") or item.get("summary"),
+            "rename": text}
+    try:
+        _call("POST", "/services/todo/update_item",
+              {**body, "description": description} if description else body)
+    except HAError:
+        if not description:
+            raise
+        _call("POST", "/services/todo/update_item", body)

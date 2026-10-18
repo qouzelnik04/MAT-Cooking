@@ -68,6 +68,14 @@ MIGRATIONS = [
         key  TEXT PRIMARY KEY          -- surovina|skupina jednotek, viz plan.py
     );
     """,
+    # 3: kolik čeho už z aktuálního plánu odešlo do nákupního seznamu --
+    # znovu se posílá jen rozdíl, takže dvojí "Poslat" nic nezdvojí
+    """
+    CREATE TABLE plan_sent (
+        key   TEXT PRIMARY KEY,
+        base  TEXT NOT NULL            -- množství v základní jednotce; '' = bez množství
+    );
+    """,
 ]
 
 
@@ -217,8 +225,8 @@ class DB:
     # ------------------------------------------------------------------
     # Plán vaření
     # ------------------------------------------------------------------
-    def plan_rows(self) -> tuple[list[dict], list[dict], set[str]]:
-        """(recepty v plánu, jejich suroviny, klíče 'mám doma')."""
+    def plan_rows(self) -> tuple[list[dict], list[dict], set[str], dict[str, str]]:
+        """(recepty v plánu, jejich suroviny, klíče 'mám doma', co už odešlo)."""
         with self.lock:
             recipes = self._con.execute(
                 "SELECT r.id, r.name, r.category, r.servings, p.portions "
@@ -230,7 +238,14 @@ class DB:
                 "JOIN ingredients g ON g.id = i.ingredient_id "
                 "WHERE i.recipe_id IN (SELECT recipe_id FROM plan)").fetchall()
             have = {r["key"] for r in self._con.execute("SELECT key FROM plan_have")}
-        return [dict(r) for r in recipes], [dict(i) for i in items], have
+            sent = {r["key"]: r["base"] for r in self._con.execute("SELECT * FROM plan_sent")}
+        return [dict(r) for r in recipes], [dict(i) for i in items], have, sent
+
+    def mark_sent(self, sent: dict[str, str]) -> None:
+        with self.lock, self._con:
+            self._con.executemany(
+                "INSERT INTO plan_sent (key, base) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET base = excluded.base", sent.items())
 
     def set_portions(self, rid: int, portions: int) -> None:
         with self.lock, self._con:
@@ -253,6 +268,7 @@ class DB:
         with self.lock, self._con:
             self._con.execute("DELETE FROM plan")
             self._con.execute("DELETE FROM plan_have")
+            self._con.execute("DELETE FROM plan_sent")
 
     def delete_ingredient(self, iid: int) -> None:
         with self.lock, self._con:

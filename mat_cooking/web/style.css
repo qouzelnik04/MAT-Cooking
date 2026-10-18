@@ -129,3 +129,4 @@ td.num { text-align: right; }
              font-variant-numeric: tabular-nums; }
 .shop li.have .qty, .shop li.have span { text-decoration: line-through; color: var(--muted); }
 .row select { width: auto; flex: 1; min-width: 160px; }
+.chip.sent { margin-left: 6px; color: var(--ok); }

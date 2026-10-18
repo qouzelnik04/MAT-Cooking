@@ -24,11 +24,12 @@ import threading
 import traceback
 import urllib.parse
 import webbrowser
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import APP_NAME, APP_VERSION, ha
 from .db import CATEGORIES, DB, InputError
-from .plan import item_text, shopping_list
+from .plan import item_text, parse_item, shopping_list
 from .units import UNITS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,6 +39,9 @@ ALLOW_ONLY = {ip.strip() for ip in (os.environ.get("MAT_ALLOW_ONLY") or "").spli
               if ip.strip()}
 
 DATA: DB | None = None
+# Odeslání do nákupního seznamu najednou jen jedno -- dva lidé ve stejnou
+# chvíli by jinak poslali stejný přírůstek dvakrát.
+SEND_LOCK = threading.Lock()
 HOST = os.environ.get("MAT_HOST") or "127.0.0.1"
 PORT = int(os.environ.get("MAT_PORT") or 8720)
 
@@ -130,7 +134,8 @@ class Handler(BaseHTTPRequestHandler):
                 DATA.clear_plan()
                 return self._json(_plan())
             if path == "/api/plan/send":
-                return self._json(_send(str(body.get("entity_id") or "")))
+                with SEND_LOCK:
+                    return self._json(_send(str(body.get("entity_id") or "")))
             return self._err(404, "Taková adresa tu není.")
         except InputError as exc:
             return self._err(400, str(exc))
@@ -193,20 +198,54 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _plan() -> dict:
-    recipes, items, have = DATA.plan_rows()
-    return {"recipes": recipes, "shopping": shopping_list(recipes, items, have),
+    recipes, items, have, sent = DATA.plan_rows()
+    return {"recipes": recipes, "shopping": shopping_list(recipes, items, have, sent),
             "ha": ha.available()}
 
 
 def _send(entity_id: str) -> dict:
-    """Chybějící suroviny z plánu do nákupního seznamu v HA."""
+    """Chybějící suroviny z plánu do nákupního seznamu v HA.
+
+    Posílá se jen to, co z plánu ještě neodešlo. Když v seznamu už je
+    nevyřízená položka té suroviny (ve tvaru, jaký appka píše), navýší se
+    -- kuřecí 200 g + 200 g = jedna položka 400 g, ne dvě.
+    """
     if not ha.available():
         raise InputError("Appka neběží v Home Assistantu -- seznam zkopíruj ručně.")
-    rows = [r for r in _plan()["shopping"] if not r["have"]]
+    rows = [r for r in _plan()["shopping"] if not r["have"] and r["to_send"]]
     if not rows:
-        raise InputError("Nic nechybí -- všechno máš doma.")
-    return ha.add_items(entity_id, [(item_text(r), "Pro: " + ", ".join(r["recipes"]))
-                                    for r in rows])
+        raise InputError("Není co poslat -- všechno chybějící už v seznamu je.")
+    existing = ha.open_items(entity_id)
+    known = {r["ingredient"].lower() for r in rows}
+    open_texts = {str(it.get("summary", "")).strip().lower() for it in existing or []}
+    parsed = []
+    for it in existing or []:
+        p = parse_item(str(it.get("summary", "")), known)
+        if p:
+            parsed.append((p, it))
+    added, updated, sent = [], [], {}
+    try:
+        for r in rows:
+            pending = Decimal(r["pending"]) if r["pending"] else None
+            note = "Pro: " + ", ".join(r["recipes"])
+            match = next(((p, it) for p, it in parsed
+                          if p[0] == r["ingredient"].lower() and p[1] == r["group"]), None)
+            if pending is None and r["ingredient"].lower() in open_texts:
+                pass                # sůl apod. bez množství už v seznamu je
+            elif pending is not None and match:
+                (_, group, base), it = match
+                text = item_text(r["ingredient"], group, base + pending)
+                ha.update_item(entity_id, it, text, note)
+                updated.append(text)
+            else:
+                text = item_text(r["ingredient"], r["group"], pending)
+                ha.add_item(entity_id, text, note)
+                added.append(text)
+            sent[r["key"]] = r["base"]
+    finally:
+        # I když HA uprostřed selže, zapamatuje se, co už odešlo
+        DATA.mark_sent(sent)
+    return {"added": added, "updated": updated}
 
 
 def _free_port(preferred: int) -> int:

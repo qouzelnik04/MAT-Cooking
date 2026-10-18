@@ -241,6 +241,10 @@ async function planView() {
   const recipeBox = el('div', {});
   const shopBox = el('div', {});
   const filter = el('input', { type: 'search', placeholder: 'Hledat recept…' });
+  // Pořadí se určí jen při otevření (vybrané nahoře) a pak se nemění --
+  // jinak by řádek po kliknutí na + uskočil a další klik trefil jiný recept.
+  const initial = portionsOf();
+  const order = recipes.slice().sort((a, b) => (initial[b.id] ? 1 : 0) - (initial[a.id] ? 1 : 0));
 
   const setPortions = async (rid, n) => {
     state = await api('api/plan/portions', { recipe_id: rid, portions: n });
@@ -250,9 +254,7 @@ async function planView() {
   const paintRecipes = () => {
     const p = portionsOf();
     const q = filter.value.toLowerCase();
-    // Vybrané nahoře, ostatní pod nimi
-    const list = recipes.filter((r) => !q || r.name.toLowerCase().includes(q))
-      .sort((a, b) => (p[b.id] ? 1 : 0) - (p[a.id] ? 1 : 0));
+    const list = order.filter((r) => !q || r.name.toLowerCase().includes(q));
     recipeBox.replaceChildren(...(list.length ? list.map((r) => {
       const n = p[r.id] || 0;
       return el('div', { class: 'plan-row' + (n ? ' on' : '') },
@@ -269,8 +271,9 @@ async function planView() {
 
   const qtyText = (r) => (r.amount ? `${fmtAmount(parseFloat(r.amount))} ${r.unit}` : '');
 
-  const sendBox = (missing) => {
-    if (!missing.length) return el('p', {}, '✓ Všechno máš doma.');
+  const sendBox = (missing, missingAll) => {
+    if (!missingAll) return el('p', {}, '✓ Všechno máš doma.');
+    if (!missing.length) return el('p', {}, '✓ Všechno chybějící už je v nákupním seznamu.');
     if (!state.ha) {
       const text = missing.map((r) => `${r.ingredient} ${qtyText(r)}`.trim()).join('\n');
       return el('div', { style: 'margin-top:12px' },
@@ -298,9 +301,11 @@ async function planView() {
         try { localStorage.setItem('mat-cooking-list', select.value); } catch (e) { /* nevadí */ }
         const res = await api('api/plan/send', { entity_id: select.value });
         const name = select.options[select.selectedIndex].text;
-        toast(`Do seznamu ${name} přidáno ${res.added.length}`
-          + (res.skipped.length ? `, ${res.skipped.length} už tam bylo` : '') + '.');
-      } catch (e) { toast(e.message); } finally { send.disabled = false; }
+        toast(`${name}: přidáno ${res.added.length}`
+          + (res.updated.length ? `, navýšeno ${res.updated.length}` : '') + '.');
+        state = await api('api/plan');
+        paintShop();
+      } catch (e) { toast(e.message); send.disabled = false; }
     });
     return el('div', { class: 'row', style: 'margin-top:12px' }, select, send);
   };
@@ -313,9 +318,12 @@ async function planView() {
       return;
     }
     const missing = rows.filter((r) => !r.have);
+    const pending = missing.filter((r) => r.to_send);
     shopBox.replaceChildren(
-      el('p', { class: 'muted small' }, `Chybí ${missing.length} z ${rows.length}. `
-        + 'Zaškrtni, co máš doma.'),
+      el('p', { class: 'muted small' }, `Chybí ${missing.length} z ${rows.length}`
+        + (missing.length > pending.length
+          ? `, ${missing.length - pending.length} už je v nákupním seznamu` : '')
+        + '. Zaškrtni, co máš doma.'),
       el('ul', { class: 'shop' }, ...rows.map((r) => {
         const cb = el('input', { type: 'checkbox' });
         cb.checked = r.have;
@@ -328,9 +336,10 @@ async function planView() {
           el('label', {}, cb,
             el('span', { class: 'qty' }, qtyText(r)),
             el('span', {}, r.ingredient,
-              el('span', { class: 'muted small' }, ' · ' + r.recipes.join(', ')))));
+              el('span', { class: 'muted small' }, ' · ' + r.recipes.join(', ')),
+              !r.have && !r.to_send ? el('span', { class: 'chip sent' }, '✓ v seznamu') : null)));
       })),
-      sendBox(missing));
+      sendBox(pending, missing.length));
   };
 
   filter.addEventListener('input', paintRecipes);
