@@ -76,6 +76,12 @@ MIGRATIONS = [
         base  TEXT NOT NULL            -- množství v základní jednotce; '' = bez množství
     );
     """,
+    # 4: doba přípravy a fotka (fotka je soubor v photos/, tady jen její verze
+    # -- mění se s každou novou fotkou, ať prohlížeč nevezme starou z mezipaměti)
+    """
+    ALTER TABLE recipes ADD COLUMN minutes INTEGER;
+    ALTER TABLE recipes ADD COLUMN photo INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 
@@ -91,6 +97,8 @@ class DB:
     def __init__(self, data_dir: str):
         os.makedirs(data_dir, exist_ok=True)
         self.path = os.path.join(data_dir, "cooking.db")
+        self.photo_dir = os.path.join(data_dir, "photos")
+        os.makedirs(self.photo_dir, exist_ok=True)
         self._con = sqlite3.connect(self.path, check_same_thread=False)
         self._con.row_factory = sqlite3.Row
         self._con.execute("PRAGMA foreign_keys = ON")
@@ -111,7 +119,7 @@ class DB:
     def list_recipes(self) -> list[dict]:
         with self.lock:
             rows = self._con.execute(
-                "SELECT r.id, r.name, r.category, r.servings, "
+                "SELECT r.id, r.name, r.category, r.servings, r.minutes, r.photo, "
                 "(SELECT COUNT(*) FROM recipe_items i WHERE i.recipe_id = r.id) AS items "
                 "FROM recipes r ORDER BY r.name COLLATE NOCASE").fetchall()
         return [dict(r) for r in rows]
@@ -138,6 +146,12 @@ class DB:
             servings = max(1, int(data.get("servings") or 1))
         except (TypeError, ValueError):
             raise InputError("Počet porcí musí být celé číslo.") from None
+        try:
+            minutes = int(data["minutes"]) if str(data.get("minutes") or "").strip() else None
+        except (TypeError, ValueError):
+            raise InputError("Doba přípravy musí být v celých minutách.") from None
+        if minutes is not None and not 0 < minutes < 10000:
+            raise InputError("Doba přípravy musí být kladný počet minut.")
 
         items = []
         for pos, it in enumerate(data.get("items") or []):
@@ -158,11 +172,11 @@ class DB:
         with self.lock, self._con:
             rid = data.get("id")
             fields = (name, category, servings, str(data.get("steps") or "").strip(),
-                      str(data.get("notes") or "").strip())
+                      str(data.get("notes") or "").strip(), minutes)
             if rid:
                 cur = self._con.execute(
                     "UPDATE recipes SET name=?, category=?, servings=?, steps=?, notes=?, "
-                    "updated=? WHERE id=?", (*fields, _now(), int(rid)))
+                    "minutes=?, updated=? WHERE id=?", (*fields, _now(), int(rid)))
                 if not cur.rowcount:
                     raise InputError("Tenhle recept už neexistuje.")
                 rid = int(rid)
@@ -170,7 +184,7 @@ class DB:
             else:
                 rid = self._con.execute(
                     "INSERT INTO recipes (name, category, servings, steps, notes, "
-                    "created, updated) VALUES (?,?,?,?,?,?,?)",
+                    "minutes, created, updated) VALUES (?,?,?,?,?,?,?,?)",
                     (*fields, _now(), _now())).lastrowid
             for ing, amount, unit, note, pos in items:
                 iid = self._ingredient_id(ing, unit)
@@ -182,6 +196,71 @@ class DB:
     def delete_recipe(self, rid: int) -> None:
         with self.lock, self._con:
             self._con.execute("DELETE FROM recipes WHERE id=?", (rid,))
+        self._remove_photo_files(rid)
+
+    # ------------------------------------------------------------------
+    # Fotky -- soubory v photos/, prohlížeč je posílá už zmenšené (JPEG)
+    # ------------------------------------------------------------------
+    def photo_path(self, rid: int, small: bool) -> str:
+        return os.path.join(self.photo_dir, f"{rid}{'-maly' if small else ''}.jpg")
+
+    def set_photo(self, rid: int, full: bytes, small: bytes) -> int:
+        for data in (full, small):
+            if not data.startswith(b"\xff\xd8"):
+                raise InputError("Fotka musí být JPEG (appka ji posílá sama, zkus to znovu).")
+        with self.lock, self._con:
+            if not self._con.execute("SELECT 1 FROM recipes WHERE id=?", (rid,)).fetchone():
+                raise InputError("Tenhle recept už neexistuje.")
+            for small_, data in ((False, full), (True, small)):
+                tmp = self.photo_path(rid, small_) + ".tmp"
+                with open(tmp, "wb") as fh:
+                    fh.write(data)
+                os.replace(tmp, self.photo_path(rid, small_))
+            self._con.execute("UPDATE recipes SET photo = photo + 1 WHERE id=?", (rid,))
+            return self._con.execute("SELECT photo FROM recipes WHERE id=?", (rid,)).fetchone()[0]
+
+    def delete_photo(self, rid: int) -> None:
+        with self.lock, self._con:
+            self._con.execute("UPDATE recipes SET photo = 0 WHERE id=?", (rid,))
+        self._remove_photo_files(rid)
+
+    def _remove_photo_files(self, rid: int) -> None:
+        for small in (False, True):
+            try:
+                os.remove(self.photo_path(rid, small))
+            except FileNotFoundError:
+                pass
+
+    # ------------------------------------------------------------------
+    # Export / import -- sdílení receptů mezi instalacemi HA
+    # ------------------------------------------------------------------
+    def export_recipes(self) -> list[dict]:
+        out = []
+        for r in self.list_recipes():
+            full = self.get_recipe(r["id"])
+            out.append({k: full[k] for k in ("name", "category", "servings", "minutes",
+                                             "steps", "notes")}
+                       | {"items": [{k: it[k] for k in ("amount", "unit", "ingredient", "note")}
+                                    for it in full["items"]],
+                          "_id": r["id"], "_photo": bool(full["photo"])})
+        return out
+
+    def import_recipes(self, recipes: list[dict]) -> tuple[list[tuple[int, dict]], list[str]]:
+        """Uloží recepty, které tu ještě nejsou (podle názvu). Vrací
+        ([(nové id, importovaný recept)], [přeskočené názvy])."""
+        with self.lock:
+            existing = {r[0].lower() for r in self._con.execute("SELECT name FROM recipes")}
+        added, skipped = [], []
+        for rec in recipes:
+            name = str(rec.get("name") or "").strip()
+            if not name or name.lower() in existing:
+                skipped.append(name or "(bez názvu)")
+                continue
+            data = {k: rec.get(k) for k in ("name", "category", "servings", "minutes",
+                                            "steps", "notes", "items")}
+            added.append((self.save_recipe(data), rec))
+            existing.add(name.lower())
+        return added, skipped
 
     # ------------------------------------------------------------------
     # Suroviny

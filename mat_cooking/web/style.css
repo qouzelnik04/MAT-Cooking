@@ -130,3 +130,13 @@ td.num { text-align: right; }
 .shop li.have .qty, .shop li.have span { text-decoration: line-through; color: var(--muted); }
 .row select { width: auto; flex: 1; min-width: 160px; }
 .chip.sent { margin-left: 6px; color: var(--ok); }
+
+/* Fotky receptů */
+.recipe .thumb { display: block; width: calc(100% + 28px); margin: -12px -14px 10px;
+                 aspect-ratio: 16 / 10; object-fit: cover;
+                 border-radius: var(--radius) var(--radius) 0 0; }
+.hero { display: block; width: 100%; max-height: 360px; object-fit: cover;
+        border-radius: var(--radius); margin: 10px 0 4px; }
+.photo-edit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.photo-edit img { width: 120px; height: 80px; object-fit: cover; border-radius: 8px; }
+.plan-link { text-decoration: none; border-bottom: 1px dashed var(--muted); }

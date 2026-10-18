@@ -37,6 +37,7 @@ nic se neinstaluje.
 |---|---|---|
 | 1 | Recepty, katalog surovin, přepočet porcí | hotovo |
 | 2 | Plán vaření: výběr receptů a porcí, sečtení surovin, „mám doma“, odeslání do nákupního seznamu HA | hotovo |
+| 2b | Odkaz z plánu na recept s naplánovanými porcemi, doba přípravy, fotky, export/import receptů | hotovo |
 | 3 | Lednice a mrazák, upozornění | |
 
 ## Kde co je
@@ -62,5 +63,7 @@ START.bat                  lokální spuštění
   musí nastartovat bez `pip install`.
 - Množství jako Decimal, ne float. Převádí se jen g/kg a ml/dl/l; lžíce,
   hrnky a kusy ne — odhad v nákupním seznamu je horší než poctivé „2 lžíce“.
+- Fotky zmenšuje prohlížeč (JPEG 1200 px + náhled 480 px) a na server jdou
+  jako soubory do `photos/` v datech add-onu, ne do databáze.
 - Schéma databáze se mění jen novou migrací v `db.py` (`MIGRATIONS`), aby
   stará data přežila aktualizaci.

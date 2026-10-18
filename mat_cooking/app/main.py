@@ -16,6 +16,7 @@ Proměnné prostředí (nastavuje je Dockerfile add-onu):
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -25,6 +26,7 @@ import traceback
 import urllib.parse
 import webbrowser
 from decimal import Decimal
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import APP_NAME, APP_VERSION, ha
@@ -89,6 +91,11 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 r = DATA.get_recipe(int(m.group(1)))
                 return self._json(r) if r else self._err(404, "Recept neexistuje.")
+            m = re.fullmatch(r"/api/recipes/(\d+)/photo", path)
+            if m:
+                return self._photo(int(m.group(1)), "small" in self.path)
+            if path == "/api/export":
+                return self._export()
             if path == "/api/ingredients":
                 return self._json(DATA.list_ingredients())
             if path == "/api/plan":
@@ -108,14 +115,24 @@ class Handler(BaseHTTPRequestHandler):
         if not self._allowed(write=True):
             return
         path = urllib.parse.urlparse(self.path).path
-        body = self._body_json()
         try:
+            body = self._body_json()
             if path == "/api/recipes":
                 return self._json({"id": DATA.save_recipe(body)})
             m = re.fullmatch(r"/api/recipes/(\d+)/delete", path)
             if m:
                 DATA.delete_recipe(int(m.group(1)))
                 return self._json({"ok": True})
+            m = re.fullmatch(r"/api/recipes/(\d+)/photo", path)
+            if m:
+                return self._json({"photo": DATA.set_photo(
+                    int(m.group(1)), _b64(body.get("full")), _b64(body.get("small")))})
+            m = re.fullmatch(r"/api/recipes/(\d+)/photo/delete", path)
+            if m:
+                DATA.delete_photo(int(m.group(1)))
+                return self._json({"ok": True})
+            if path == "/api/import":
+                return self._json(_import(body))
             m = re.fullmatch(r"/api/ingredients/(\d+)/rename", path)
             if m:
                 return self._json({"result": DATA.rename_ingredient(
@@ -171,8 +188,54 @@ class Handler(BaseHTTPRequestHandler):
         with open(full, "rb") as fh:
             self._raw(fh.read(), ctype + "; charset=utf-8")
 
+    def _photo(self, rid: int, small: bool) -> None:
+        try:
+            with open(DATA.photo_path(rid, small), "rb") as fh:
+                data = fh.read()
+        except FileNotFoundError:
+            return self._err(404, "Recept nemá fotku.")
+        # Adresa obsahuje verzi fotky (?v=N), takže ji prohlížeč smí držet dlouho
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=31536000")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _export(self) -> None:
+        recipes = DATA.export_recipes()
+        for r in recipes:
+            rid, has = r.pop("_id"), r.pop("_photo")
+            if has:
+                with open(DATA.photo_path(rid, False), "rb") as fh:
+                    r["photo"] = base64.b64encode(fh.read()).decode()
+                with open(DATA.photo_path(rid, True), "rb") as fh:
+                    r["photo_small"] = base64.b64encode(fh.read()).decode()
+        body = json.dumps({"format": "mat-cooking", "version": 1, "recipes": recipes},
+                          ensure_ascii=False, indent=1).encode("utf-8")
+        name = f"mat-cooking-recepty-{date.today().isoformat()}.json"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _body_json(self) -> dict:
-        length = min(int(self.headers.get("Content-Length") or 0), 2 * 1024 * 1024)
+        # Import receptů s fotkami a fotka samotná jsou velké, zbytek malý
+        big = self.path.split("?")[0].endswith(("/import", "/photo"))
+        limit = (100 if big else 2) * 1024 * 1024
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > limit:
+            # Dočíst a zahodit -- jinak se spojení zavře dřív, než prohlížeč
+            # dostane hlášku, a uvidí jen obecnou chybu sítě
+            left = min(length, 300 * 1024 * 1024)
+            while left > 0:
+                chunk = self.rfile.read(min(left, 1024 * 1024))
+                if not chunk:
+                    break
+                left -= len(chunk)
+            raise InputError(f"Data jsou příliš velká (limit {limit // 1024 // 1024} MB).")
         if not length:
             return {}
         try:
@@ -195,6 +258,24 @@ class Handler(BaseHTTPRequestHandler):
     def _err(self, code: int, msg: str) -> None:
         self._raw(json.dumps({"error": msg}, ensure_ascii=False).encode("utf-8"),
                   "application/json; charset=utf-8", code)
+
+
+def _b64(value) -> bytes:
+    try:
+        return base64.b64decode(str(value or ""), validate=True)
+    except (ValueError, TypeError):
+        raise InputError("Poškozená data fotky.") from None
+
+
+def _import(body: dict) -> dict:
+    """Recepty ze souboru z exportu. Recept se stejným názvem se přeskočí."""
+    if body.get("format") != "mat-cooking" or not isinstance(body.get("recipes"), list):
+        raise InputError("Tohle není soubor s recepty z MAT-Cooking.")
+    added, skipped = DATA.import_recipes(body["recipes"])
+    for rid, rec in added:
+        if rec.get("photo") and rec.get("photo_small"):
+            DATA.set_photo(rid, _b64(rec["photo"]), _b64(rec["photo_small"]))
+    return {"added": [rec["name"] for _, rec in added], "skipped": skipped}
 
 
 def _plan() -> dict:

@@ -12,12 +12,17 @@ Otevři **Vaření** v postranním panelu HA.
 - **Recepty** — přidávání receptů se surovinami (množství + jednotka +
   surovina), postupem a poznámkami. V detailu receptu jde přepočítat počet
   porcí tlačítky −/+.
+- **Fotky a doba přípravy** — u receptu v editoru. Fotku prohlížeč před
+  nahráním zmenší (asi 200 kB), takže místo na HA nezabere.
+- **Export / Import** — dole v záložce Recepty. Soubor se všemi recepty
+  i fotkami; na jiném HA ho nahraješ přes Import (recepty se stejným názvem
+  se přeskočí).
 - **Suroviny** — katalog všech surovin. Když stejnou věc máš pod dvěma názvy,
   přejmenuj jednu na druhou a sloučí se.
 
 ## Data
 
-Databáze je v datech add-onu a je součástí zálohy HA. Při záloze se add-on
+Databáze a fotky (zmenšené, ~200 kB na recept) jsou v datech add-onu a je součástí zálohy HA. Při záloze se add-on
 na chvíli zastaví, aby se nezálohovala rozepsaná databáze.
 
 ## Přístup

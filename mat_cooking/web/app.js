@@ -47,6 +47,31 @@ function fmtAmount(x) {
 }
 const catName = (c) => (S.meta.categories || {})[c] || c;
 
+const photoUrl = (r, small) => `api/recipes/${r.id}/photo?${small ? 'small=1&' : ''}v=${r.photo}`;
+const minutesText = (m) => (!m ? '' : m < 60 ? `${m} min`
+  : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`);
+
+/* Fotka se zmenší přímo v prohlížeči: na server jde jen JPEG ~1200 px
+   (~200 kB) a náhled ~480 px. Fotka z telefonu (klidně 5 MB) tak na HA
+   nezabere skoro nic. */
+async function resizeJpeg(file, max) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, fail) => {
+      const i = new Image();
+      i.onload = () => ok(i);
+      i.onerror = () => fail(new Error('Tenhle obrázek prohlížeč neumí otevřít (zkus JPEG nebo PNG).'));
+      i.src = url;
+    });
+    const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * scale);
+    c.height = Math.round(img.naturalHeight * scale);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.82).split(',')[1];
+  } finally { URL.revokeObjectURL(url); }
+}
+
 /* Tlačítko, které se napoprvé zeptá a smaže až napodruhé (confirm() v okně
    HA nemusí fungovat). */
 function confirmButton(label, ask, action) {
@@ -65,13 +90,13 @@ function confirmButton(label, ask, action) {
 
 /* ============================================================== ROUTER */
 async function route() {
-  const [name, arg] = (location.hash.replace('#', '') || 'plan').split('/');
+  const [name, arg, arg2] = (location.hash.replace('#', '') || 'plan').split('/');
   const tab = ['suroviny', 'plan'].includes(name) ? name : 'recepty';
   document.querySelectorAll('.tabs a').forEach((a) =>
     a.classList.toggle('on', a.dataset.tab === tab));
   const view = $('#view');
   try {
-    if (name === 'recept') view.replaceChildren(await recipeView(+arg));
+    if (name === 'recept') view.replaceChildren(await recipeView(+arg, +arg2 || 0));
     else if (name === 'upravit') view.replaceChildren(await editView(+arg));
     else if (name === 'novy') view.replaceChildren(await editView(null));
     else if (name === 'suroviny') view.replaceChildren(await ingredientsView());
@@ -94,11 +119,12 @@ async function listView() {
       && (!q || r.name.toLowerCase().includes(q)));
     box.replaceChildren(...(shown.length ? shown.map((r) =>
       el('a', { class: 'recipe', href: `#recept/${r.id}` },
+        r.photo ? el('img', { class: 'thumb', src: photoUrl(r, true), alt: '', loading: 'lazy' }) : null,
         el('b', {}, r.name),
         el('span', { class: 'chip' }, catName(r.category)), ' ',
         el('span', { class: 'muted small' },
-          `${r.servings} ${r.servings === 1 ? 'porce' : r.servings < 5 ? 'porce' : 'porcí'} · `
-          + `${r.items} surovin`)))
+          `${r.servings} ${r.servings < 5 ? 'porce' : 'porcí'} · ${r.items} surovin`
+          + (r.minutes ? ` · ⏱ ${minutesText(r.minutes)}` : ''))))
       : [el('p', { class: 'muted' }, S.recipes.length ? 'Nic nenalezeno.'
         : 'Zatím žádné recepty. Přidej první.')]));
   };
@@ -111,15 +137,33 @@ async function listView() {
         onclick: () => { S.category = k; paintChips(); paint(); } }, v)));
   paintChips();
   paint();
+  const importInput = el('input', { type: 'file', accept: '.json,application/json', hidden: true });
+  importInput.addEventListener('change', async () => {
+    const f = importInput.files[0];
+    importInput.value = '';
+    if (!f) return;
+    try {
+      const res = await api('api/import', JSON.parse(await f.text()));
+      toast(`Importováno ${res.added.length}`
+        + (res.skipped.length ? `, přeskočeno ${res.skipped.length} (už existují)` : '') + '.');
+      route();
+    } catch (e) { toast('Import se nepovedl: ' + e.message); }
+  });
   return el('div', {},
     el('div', { class: 'row' }, el('h1', {}, 'Recepty'), el('div', { class: 'spacer' }),
       el('a', { class: 'btn primary', href: '#novy' }, '+ Nový recept')),
-    search, chips, box);
+    search, chips, box,
+    el('div', { class: 'row', style: 'margin-top:24px' },
+      el('a', { class: 'btn small', href: 'api/export', download: '' }, '⇩ Export receptů'),
+      el('button', { class: 'btn small', onclick: () => importInput.click() }, '⇧ Import'),
+      importInput,
+      el('span', { class: 'muted small' }, 'Soubor s recepty i fotkami — na jiném HA ho '
+        + 'nahraješ přes Import. Recepty se stejným názvem se přeskočí.')));
 }
 
-async function recipeView(id) {
+async function recipeView(id, planned) {
   const r = await api(`api/recipes/${id}`);
-  let portions = r.servings;
+  let portions = planned || r.servings;
   const list = el('ul', { class: 'ingredients' });
   const count = el('b', {});
   const paint = () => {
@@ -134,11 +178,15 @@ async function recipeView(id) {
   const steps = r.steps.split('\n').map((s) => s.trim()).filter(Boolean);
 
   return el('div', {},
-    el('a', { href: '#recepty', class: 'muted small' }, '← Recepty'),
+    planned ? el('a', { href: '#plan', class: 'muted small' }, '← Plán vaření')
+      : el('a', { href: '#recepty', class: 'muted small' }, '← Recepty'),
+    r.photo ? el('img', { class: 'hero', src: photoUrl(r, false), alt: r.name }) : null,
     el('h1', {}, r.name),
     el('div', { class: 'row' }, el('span', { class: 'chip' }, catName(r.category)),
+      r.minutes ? el('span', { class: 'chip' }, '⏱ ' + minutesText(r.minutes)) : null,
       el('span', { class: 'muted small' }, `recept je na ${r.servings} `
-        + (r.servings < 5 ? 'porce' : 'porcí'))),
+        + (r.servings < 5 ? 'porce' : 'porcí')
+        + (planned ? ` · v plánu ${planned}` : ''))),
     el('div', { class: 'card' },
       el('div', { class: 'row' }, el('h2', { style: 'margin:0' }, 'Suroviny'),
         el('div', { class: 'spacer' }),
@@ -163,12 +211,35 @@ async function recipeView(id) {
 
 async function editView(id) {
   const r = id ? await api(`api/recipes/${id}`)
-    : { name: '', category: 'hlavni', servings: 4, steps: '', notes: '', items: [] };
+    : { name: '', category: 'hlavni', servings: 4, minutes: null, photo: 0, steps: '',
+      notes: '', items: [] };
   await loadIngredientNames();
   const name = el('input', { value: r.name, placeholder: 'např. Kuře s rýží' });
   const category = el('select', {}, ...Object.entries(S.meta.categories).map(([k, v]) =>
     el('option', { value: k, selected: k === r.category }, v)));
   const servings = el('input', { type: 'number', min: 1, step: 1, value: r.servings });
+  const minutes = el('input', { type: 'number', min: 1, step: 5, value: r.minutes || '',
+    placeholder: 'např. 45' });
+  // Fotka: nová se nahraje až po uložení receptu (nový recept ještě nemá id)
+  let newPhoto = null;
+  let dropPhoto = false;
+  const preview = el('div', { class: 'photo-edit' });
+  const photoInput = el('input', { type: 'file', accept: 'image/*', hidden: true });
+  const paintPhoto = () => {
+    const src = newPhoto ? URL.createObjectURL(newPhoto)
+      : (r.photo && !dropPhoto ? photoUrl(r, true) : null);
+    preview.replaceChildren(
+      src ? el('img', { src, alt: '' }) : el('span', { class: 'muted small' }, 'Bez fotky'),
+      el('button', { class: 'btn small', type: 'button', onclick: () => photoInput.click() },
+        src ? 'Změnit fotku' : '+ Fotka'),
+      src ? el('button', { class: 'btn small danger', type: 'button', onclick: () => {
+        newPhoto = null; dropPhoto = true; paintPhoto();
+      } }, 'Odebrat') : null);
+  };
+  photoInput.addEventListener('change', () => {
+    if (photoInput.files[0]) { newPhoto = photoInput.files[0]; dropPhoto = false; paintPhoto(); }
+  });
+  paintPhoto();
   const steps = el('textarea', { placeholder: 'Každý krok na nový řádek' }, r.steps);
   const notes = el('textarea', { style: 'min-height:80px' }, r.notes);
   const rows = el('div', {});
@@ -201,14 +272,21 @@ async function editView(id) {
     try {
       const res = await api('api/recipes', {
         id: id || null, name: name.value, category: category.value,
-        servings: servings.value, steps: steps.value, notes: notes.value,
+        servings: servings.value, minutes: minutes.value, steps: steps.value, notes: notes.value,
         items: [...rows.children].map((x) => x.read()),
       });
+      if (newPhoto) {
+        save.textContent = 'Nahrávám fotku…';
+        await api(`api/recipes/${res.id}/photo`, {
+          full: await resizeJpeg(newPhoto, 1200), small: await resizeJpeg(newPhoto, 480) });
+      } else if (dropPhoto && r.photo) {
+        await api(`api/recipes/${res.id}/photo/delete`, {});
+      }
       toast('Recept uložen.');
       location.hash = `#recept/${res.id}`;
     } catch (e) {
       err.textContent = e.message;
-    } finally { save.disabled = false; }
+    } finally { save.disabled = false; save.textContent = 'Uložit recept'; }
   });
 
   return el('div', {},
@@ -218,7 +296,10 @@ async function editView(id) {
       el('label', { class: 'field' }, el('span', {}, 'Název'), name),
       el('div', { class: 'row' },
         el('label', { class: 'field', style: 'flex:2' }, el('span', {}, 'Kategorie'), category),
-        el('label', { class: 'field', style: 'flex:1' }, el('span', {}, 'Recept je na porcí'), servings))),
+        el('label', { class: 'field', style: 'flex:1' }, el('span', {}, 'Recept je na porcí'), servings),
+        el('label', { class: 'field', style: 'flex:1' }, el('span', {}, 'Doba přípravy (min)'), minutes)),
+      el('div', { class: 'field' }, el('span', { class: 'muted small' }, 'Fotka jídla'),
+        preview, photoInput)),
     el('div', { class: 'card' },
       el('h2', { style: 'margin-top:0' }, 'Suroviny'),
       el('p', { class: 'muted small' }, 'Množství jako 200, 1,5 nebo 1/2. Názvy surovin '
@@ -258,7 +339,9 @@ async function planView() {
     recipeBox.replaceChildren(...(list.length ? list.map((r) => {
       const n = p[r.id] || 0;
       return el('div', { class: 'plan-row' + (n ? ' on' : '') },
-        el('div', { class: 'spacer' }, el('b', {}, r.name), ' ',
+        el('div', { class: 'spacer' },
+          n ? el('a', { href: `#recept/${r.id}/${n}`, class: 'plan-link' }, el('b', {}, r.name))
+            : el('b', {}, r.name), ' ',
           el('span', { class: 'chip' }, catName(r.category))),
         el('div', { class: 'stepper' },
           el('button', { onclick: () => setPortions(r.id, Math.max(0, n - 1)),
