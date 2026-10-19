@@ -34,13 +34,18 @@ Appka si v HA přes websocket API sama udržuje (`app/display.py`):
 
 - dashboard `mat-cooking-displej` -- vytvoří ho a přepíše při každé změně
   receptů, fotek nebo plánu (mřížka receptů s fotkami, naplánované první),
-- pomocníky `input_select.mat_cooking_recept` (vybraný recept, nebo mřížka),
+- pomocníky `input_select.mat_cooking_recept` (klepnutí na dlaždici v mřížce),
   `input_number.mat_cooking_porce` a `input_select.mat_cooking_pismo`,
 - entity `sensor.mat_cooking_recept` (hotové HTML karet receptu) a
   `sensor.mat_cooking_recept_foto` (náhled fotky jako data: URL).
 
-Klepnutí na displeji mění pomocníky, appka změny sleduje a recept hned
-překreslí; po výběru receptu nastaví porce z plánu, jinak výchozí. Karty jsou
+Dashboard má dva pohledy, `recept` a `recepty` (mřížka). Podmíněné karty
+(conditional) promítání na Nest Hub neukáže -- zůstane bílá obrazovka --,
+proto se na mřížku jde navigací a zpátky na recept appka přepne sama
+(`cast.show_lovelace_view` na displej, kam se naposledy posílalo). Klepnutí
+na displeji mění pomocníky, appka změny sleduje a recept hned překreslí; po
+výběru receptu nastaví porce z plánu, jinak výchozí. Který recept je na
+displeji, si appka pamatuje v `displej.json` vedle databáze. Karty jsou
 jen vestavěné (markdown, picture-glance, tile, button), nic z HACS. Po
 restartu HA se appka znovu připojí a vše obnoví.
 

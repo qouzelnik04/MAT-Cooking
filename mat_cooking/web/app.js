@@ -244,19 +244,8 @@ function displayBox(r, getPortions) {
         toast(`Posláno na displej, porcí: ${getPortions()}. Načtení trvá i 10–20 s.`);
       } catch (e) { toast(e.message); } finally { send.disabled = false; }
     });
-    // Dočasně: zkušební pohledy (co z dashboardu displej neumí ukázat)
-    const tests = el('details', { class: 'small' }, el('summary', { class: 'muted' }, 'Test displeje'),
-      el('div', { class: 'row', style: 'margin-top:6px' }, ...[1, 2, 3, 4, 5].map((n) =>
-        el('button', { class: 'btn small', onclick: async () => {
-          try {
-            await api('api/display', { recipe_id: r.id, portions: getPortions(),
-              entity_id: select.value, size: size.value, view: `test-${n}` });
-            toast(`Test ${n} poslán na displej.`);
-          } catch (e) { toast(e.message); }
-        } }, `Test ${n}`))));
     box.replaceChildren(
       el('div', { class: 'row' }, select, size, send),
-      tests,
       el('p', { class: 'muted small' }, res.controls
         ? 'Na displeji jde vybrat recept z mřížky, měnit porce i písmo. Dashboard '
           + '„MAT-Cooking displej“ v HA udržuje appka sama.'

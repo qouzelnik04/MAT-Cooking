@@ -5,14 +5,15 @@ Appka si v HA sama udržuje:
   - dashboard "mat-cooking-displej" (vytvoří ho a přepíše při každé změně
     receptů nebo plánu -- mřížka receptů s fotkami se tak nemusí ručně
     vkládat),
-  - pomocníky input_select.mat_cooking_recept (vybraný recept, nebo
-    PICKER = mřížka receptů), input_number.mat_cooking_porce a
-    input_select.mat_cooking_pismo (velikost písma),
+  - pomocníky input_select.mat_cooking_recept (klepnutí na recept v mřížce),
+    input_number.mat_cooking_porce a input_select.mat_cooking_pismo,
   - entity sensor.mat_cooking_recept (hotové HTML receptu pro karty
     markdown) a sensor.mat_cooking_recept_foto (náhled fotky jako data: URL).
 
 Klepnutí na displeji mění pomocníky, appka to přes websocket hned ví
-a recept překreslí. Po výběru receptu nastaví porce z plánu, jinak výchozí.
+a recept překreslí. Po výběru receptu nastaví porce z plánu, jinak výchozí
+a displej přepne z mřížky zpátky na recept. Podmíněné karty (conditional)
+promítání na Nest Hub neukáže -- proto dva pohledy a navigace.
 Recept poslaný z appky (tlačítko Na displej) jde stejnou cestou.
 
 Karty jsou jen ty vestavěné v HA (žádné doplňky z HACS). Karta markdown
@@ -24,6 +25,8 @@ from __future__ import annotations
 
 import base64
 import html
+import json
+import os
 import threading
 import time
 import traceback
@@ -42,10 +45,8 @@ NUMBER = "input_number.mat_cooking_porce"
 SIZE = "input_select.mat_cooking_pismo"
 DASHBOARD_PATH = "mat-cooking-displej"
 VIEW_PATH = "recept"
-PICKER = "📖 Výběr receptu"
-# Dočasné zkušební pohledy: který se na displeji ukáže, prozradí kartu,
-# kterou promítání na Nest Hubu neumí. Po zjištění se odstraní.
-TEST_VIEWS = ("test-1", "test-2", "test-3", "test-4", "test-5")
+PICKER_VIEW = "recepty"
+PICKER = "📖 Výběr receptu"      # klidový stav SELECT (viz _sync_all)
 MAX_PORTIONS = 50
 
 SIZES = {"normalni": "A", "velke": "A+", "obri": "A++"}   # klíč z appky -> volba
@@ -153,9 +154,22 @@ def _tile(label: str, image: str, title: str) -> dict:
             "tap_action": _act("input_select.select_option", SELECT, option=label)}
 
 
+def _navigate(view: str) -> dict:
+    return {"action": "navigate", "navigation_path": f"/{DASHBOARD_PATH}/{view}"}
+
+
 def dashboard_config(tiles_planned: list[dict], tiles_rest: list[dict]) -> dict:
+    """Dva pohledy: recept a mřížka receptů.
+
+    Bez podmíněných karet -- promítání na Nest Hub je neukáže (zůstane bílo).
+    Na mřížku se jde tlačítkem (navigace), zpátky na recept přepne appka sama,
+    když se klepnutím na dlaždici vybere recept.
+    """
     attr = "{{ state_attr('" + ENTITY + "', '%s') or '' }}"
-    picker = [_md("# Co budeme vařit?", True)]
+    picker = [{"type": "horizontal-stack", "cards": [
+        _md("# Co budeme vařit?", True),
+        _button("Zpět na recept", "mdi:arrow-left", _navigate(VIEW_PATH)),
+    ]}]
     if tiles_planned:
         picker += [_md("## Naplánováno", True),
                    {"type": "grid", "columns": 4, "square": False, "cards": tiles_planned}]
@@ -167,8 +181,7 @@ def dashboard_config(tiles_planned: list[dict], tiles_rest: list[dict]) -> dict:
         picker.append(_md("Zatím tu nejsou žádné recepty -- přidej je v appce MAT-Cooking."))
 
     toolbar = {"type": "horizontal-stack", "cards": [
-        _button("Recepty", "mdi:view-grid-outline",
-                _act("input_select.select_option", SELECT, option=PICKER)),
+        _button("Recepty", "mdi:view-grid-outline", _navigate(PICKER_VIEW)),
         {"type": "tile", "entity": NUMBER, "name": "Porce", "icon": "mdi:account-group",
          "hide_state": True, "tap_action": {"action": "none"},
          "features": [{"type": "numeric-input", "style": "buttons"}]},
@@ -177,10 +190,9 @@ def dashboard_config(tiles_planned: list[dict], tiles_rest: list[dict]) -> dict:
         _button("Větší písmo", "mdi:format-font-size-increase",
                 _act("input_select.select_next", SIZE, cycle=False)),
     ]}
-    photo = {"type": "conditional",
-             "conditions": [{"condition": "state", "entity": PHOTO_ENTITY, "state": "ano"}],
-             "card": _md("{% set f = state_attr('" + PHOTO_ENTITY + "', 'src') %}"
-                         '{% if f %}<center><img src="{{ f }}" height="230"></center>{% endif %}')}
+    # Bez rámečku: když recept fotku nemá, karta nic neukáže
+    photo = _md("{% set f = state_attr('" + PHOTO_ENTITY + "', 'src') %}"
+                '{% if f %}<center><img src="{{ f }}" height="230"></center>{% endif %}', True)
     recipe = {"type": "vertical-stack", "cards": [
         toolbar,
         {"type": "horizontal-stack", "cards": [
@@ -189,28 +201,11 @@ def dashboard_config(tiles_planned: list[dict], tiles_rest: list[dict]) -> dict:
             {"type": "vertical-stack", "cards": [photo, _md(attr % "html_postup")]},
         ]},
     ]}
-    columns = recipe["cards"][1]
-    tests = [
-        ("test-1", _md("# Test 1\nObyčejný text.")),
-        ("test-2", {"type": "vertical-stack", "cards": [_md("# Test 2"), *recipe["cards"]]}),
-        ("test-3", {"type": "vertical-stack", "cards": [_md("# Test 3"), columns]}),
-        ("test-4", {"type": "vertical-stack", "cards": [_md("# Test 4"), *picker]}),
-        ("test-5", {"type": "vertical-stack", "cards": [_md("# Test 5"), {
-            "type": "conditional",
-            "conditions": [{"condition": "state", "entity": SELECT, "state_not": "xxx"}],
-            "card": _md("Podmíněná karta funguje.")}]}),
-    ]
-    return {"title": "MAT-Cooking displej", "views": [{
-        "title": "Recept", "path": VIEW_PATH, "type": "panel", "cards": [{
-            "type": "vertical-stack", "cards": [
-                {"type": "conditional",
-                 "conditions": [{"condition": "state", "entity": SELECT, "state": PICKER}],
-                 "card": {"type": "vertical-stack", "cards": picker}},
-                {"type": "conditional",
-                 "conditions": [{"condition": "state", "entity": SELECT, "state_not": PICKER}],
-                 "card": recipe},
-            ]}],
-    }] + [{"title": path, "path": path, "type": "panel", "cards": [card]} for path, card in tests]}
+    return {"title": "MAT-Cooking displej", "views": [
+        {"title": "Recept", "path": VIEW_PATH, "type": "panel", "cards": [recipe]},
+        {"title": "Recepty", "path": PICKER_VIEW, "type": "panel",
+         "cards": [{"type": "vertical-stack", "cards": picker}]},
+    ]}
 
 
 # ----------------------------------------------------------------------
@@ -225,10 +220,24 @@ class Display:
         self.controls = False       # pomocníci a dashboard v HA jsou, appka je sleduje
         self.error = ""
         self._photo_key = None      # jaká fotka je v HA (aby se neposílala znovu)
-        self._last_labels: dict[str, int] = {}  # popisky při poslední synchronizaci
         self._dashboard = None      # naposledy uložený dashboard
         self._cmd = None            # příkaz websocketu (jen během spojení)
         self._sync = threading.Event()
+        # Recept na displeji a displej, kam se naposledy posílalo (přežije restart)
+        self._state_file = os.path.join(os.path.dirname(data.path), "displej.json")
+        try:
+            with open(self._state_file, encoding="utf-8") as fh:
+                saved = json.load(fh)
+        except (OSError, ValueError):
+            saved = {}
+        self.current: int | None = saved.get("recipe_id")
+        self.player: str | None = saved.get("entity_id")
+
+    def _save(self) -> None:
+        tmp = self._state_file + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"recipe_id": self.current, "entity_id": self.player}, fh)
+        os.replace(tmp, self._state_file)
 
     def start(self) -> None:
         if ha.available():
@@ -244,8 +253,7 @@ class Display:
     # ------------------------------------------------------------------
     # Z appky: recept na displej
     # ------------------------------------------------------------------
-    def show(self, entity_id: str, rid: int, portions: int | None, size: str,
-             view: str = "") -> None:
+    def show(self, entity_id: str, rid: int, portions: int | None, size: str) -> None:
         if not ha.available():
             raise InputError("Appka neběží v Home Assistantu -- na displej nejde poslat.")
         if not entity_id.startswith("media_player."):
@@ -255,17 +263,21 @@ class Display:
             raise InputError("Recept neexistuje.")
         portions = min(MAX_PORTIONS, max(1, int(portions or r["servings"])))
         with self.lock:
+            self.current, self.player = rid, entity_id
+            self._save()
             if size in SIZES:
                 self.size = SIZES[size]
             if self.controls:
                 try:
-                    self._set_helpers(rid, portions)
+                    self._set_helpers(portions)
                 except ha.HAError as exc:
                     print(f"  Displej: pomocníky nejde nastavit: {exc}", flush=True)
             self._render(rid, portions)
+        self._cast(entity_id)
+
+    def _cast(self, entity_id: str) -> None:
         ha.call_service("cast", "show_lovelace_view", {
-            "entity_id": entity_id, "dashboard_path": DASHBOARD_PATH,
-            "view_path": view if view in TEST_VIEWS else VIEW_PATH})
+            "entity_id": entity_id, "dashboard_path": DASHBOARD_PATH, "view_path": VIEW_PATH})
 
     # ------------------------------------------------------------------
     def _options(self) -> list[tuple[str, int]]:
@@ -320,25 +332,26 @@ class Display:
         return dashboard_config(tiles_planned, tiles_rest)
 
     def _sync_all(self) -> None:
-        """Výběr receptů, dashboard a recept na displeji podle aktuálních dat."""
+        """Výběr receptů, dashboard a recept na displeji podle aktuálních dat.
+
+        SELECT slouží jen jako povel "tenhle recept": v klidu je na PICKER,
+        takže klepnutí na kteroukoli dlaždici (i tu samou znovu) je změna.
+        Který recept je na displeji, si pamatuje appka (podle id, takže
+        přejmenování nevadí).
+        """
         options = self._options()
         labels = [PICKER] + [label for label, _ in options]
         st = ha.get_state(SELECT)
-        last, self._last_labels = self._last_labels, dict(options)
+        cur = (st or {}).get("state")
+        if cur and cur != PICKER and self.current is None:
+            self.current = dict(options).get(cur)     # přechod z 0.7: recept byl v SELECT
+            self._save()
         if not st or list((st.get("attributes") or {}).get("options") or []) != labels:
-            cur = (st or {}).get("state")
-            renamed = next((lb for lb, i in options if i == last.get(cur)), None)
-            if cur and cur not in labels and renamed:
-                # Recept na displeji se přejmenoval: přepnout na nový název tak,
-                # aby HA mezitím nevybralo jiný recept a nezměnily se porce
-                ha.call_service("input_select", "set_options",
-                                {"entity_id": SELECT, "options": labels + [cur]})
-                self.expect_select = renamed
-                ha.call_service("input_select", "select_option",
-                                {"entity_id": SELECT, "option": renamed})
-            # Když aktuální recept v seznamu není (smazaný), HA vybere první
-            # volbu -- mřížku receptů
             ha.call_service("input_select", "set_options", {"entity_id": SELECT, "options": labels})
+            cur = (ha.get_state(SELECT) or {}).get("state")
+        if cur and cur != PICKER:
+            self.expect_select = PICKER
+            ha.call_service("input_select", "select_option", {"entity_id": SELECT, "option": PICKER})
         if self._cmd:
             config = self._dashboard_config()
             if config != self._dashboard:
@@ -347,12 +360,7 @@ class Display:
                 self._dashboard = config
         self._refresh()
 
-    def _set_helpers(self, rid: int, portions: int) -> None:
-        self._sync_all()
-        label = next((lb for lb, i in self._options() if i == rid), None)
-        if label and (ha.get_state(SELECT) or {}).get("state") != label:
-            self.expect_select = label
-            ha.call_service("input_select", "select_option", {"entity_id": SELECT, "option": label})
+    def _set_helpers(self, portions: int) -> None:
         if self._number(ha.get_state(NUMBER)) != portions:
             self.expect_number = portions
             ha.call_service("input_number", "set_value", {"entity_id": NUMBER, "value": portions})
@@ -360,13 +368,20 @@ class Display:
             ha.call_service("input_select", "select_option", {"entity_id": SIZE, "option": self.size})
 
     def _refresh(self) -> None:
-        """Překreslí recept podle pomocníků (po startu, restartu HA, úpravě receptu)."""
-        sel = (ha.get_state(SELECT) or {}).get("state")
-        if sel == PICKER:
-            return
-        rid = dict(self._options()).get(sel)
+        """Překreslí recept na displeji (po startu, restartu HA, úpravě receptu, porcích)."""
+        rid = self.current if self.current and self.data.get_recipe(self.current) else None
         portions = self._number(ha.get_state(NUMBER))
         self._render(rid, portions or (self._default_portions(rid) if rid else 1))
+
+    def _player(self) -> str | None:
+        """Displej, na kterém recept je: naposledy použitý, jinak ten, co ukazuje HA."""
+        if self.player:
+            return self.player
+        for s in ha._call("GET", "/states") or []:
+            app = str((s.get("attributes") or {}).get("app_name") or "")
+            if s.get("entity_id", "").startswith("media_player.") and "Home Assistant" in app:
+                return s["entity_id"]
+        return None
 
     def _on_change(self, entity: str, state: str) -> None:
         with self.lock:
@@ -378,12 +393,21 @@ class Display:
                 if state == PICKER:
                     return
                 rid = dict(self._options()).get(state)
-                portions = self._default_portions(rid) if rid else 1
-                if self._number(ha.get_state(NUMBER)) != portions:
-                    self.expect_number = portions
-                    ha.call_service("input_number", "set_value",
-                                    {"entity_id": NUMBER, "value": portions})
-                self._render(rid, portions)
+                if rid:
+                    self.current = rid
+                    self._save()
+                    portions = self._default_portions(rid)
+                    if self._number(ha.get_state(NUMBER)) != portions:
+                        self.expect_number = portions
+                        ha.call_service("input_number", "set_value",
+                                        {"entity_id": NUMBER, "value": portions})
+                    self._render(rid, portions)
+                    player = self._player()
+                    if player:
+                        self._cast(player)      # z mřížky zpátky na recept
+                self.expect_select = PICKER
+                ha.call_service("input_select", "select_option",
+                                {"entity_id": SELECT, "option": PICKER})
             elif entity == NUMBER:
                 value = self._number({"state": state})
                 if value is None:
@@ -403,7 +427,7 @@ class Display:
         if not r:
             ha.set_state(ENTITY, "Žádný recept", {
                 **base, "porce": 0, "pismo": self.size, "html_suroviny": "", "html_postup": "",
-                "html_hlavicka": "<div><h1>Recept nenalezen</h1></div>"})
+                "html_hlavicka": "<div><h1>Vyber recept</h1>Klepni na Recepty.</div>"})
         else:
             ha.set_state(ENTITY, r["name"][:255], {**base, **recipe_html(r, portions, self.size)})
         key = (r["id"], r["photo"]) if r and r["photo"] else None
