@@ -30,7 +30,7 @@ je.
 Tlačítko **📺 Na displej** v detailu receptu zapíše recept do entity
 `sensor.mat_cooking_recept` (název, porce, přepočtené suroviny, postup)
 a službou `cast.show_lovelace_view` promítne na zvolený `media_player`
-dashboard `mat-cooking-displej`, který tu entitu ukazuje. YAML dashboardu je
+dashboard `mat-cooking-displej`, který tu entitu ukazuje. Dashboard má tři pohledy (velikosti písma), na displeji se přepínají tlačítky A / A+ / A++. YAML dashboardu je
 v `app/main.py` (`DISPLAY_DASHBOARD`) a appka ho ukazuje ke zkopírování.
 Entita není trvalá -- po restartu HA zmizí do dalšího poslání receptu.
 
@@ -47,7 +47,7 @@ nic se neinstaluje.
 | 1 | Recepty, katalog surovin, přepočet porcí | hotovo |
 | 2 | Plán vaření: výběr receptů a porcí, sečtení surovin, „mám doma“, odeslání do nákupního seznamu HA | hotovo |
 | 2b | Odkaz z plánu na recept s naplánovanými porcemi, doba přípravy, fotky, export/import receptů | hotovo |
-| 2c | Recept na displej (Google Nest Hub přes Cast) | hotovo, ověřit dotyk |
+| 2c | Recept na displej (Google Nest Hub přes Cast), velikost písma A / A+ / A++ | hotovo |
 | 3 | Lednice a mrazák, upozornění | |
 
 ## Kde co je

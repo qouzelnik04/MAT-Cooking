@@ -302,34 +302,60 @@ def _import(body: dict) -> dict:
 
 # Dashboard v HA, který appka promítá na displej. Uživatel ho jednou vytvoří
 # (Nastavení -> Dashboardy -> Přidat -> URL "mat-cooking-displej" -> Upravit
-# -> Editor kódu) a vloží tohle. Appka ho ukazuje ke zkopírování.
-DISPLAY_DASHBOARD = """\
-title: MAT-Cooking displej
-views:
-  - title: Recept
-    path: recept
-    cards:
-      - type: markdown
-        content: |
-          # {{ states('sensor.mat_cooking_recept') }}
-          **{{ state_attr('sensor.mat_cooking_recept', 'info') }}**
+# -> Editor kódu) a vloží ho. Appka ho ukazuje ke zkopírování.
+# Tři pohledy = tři velikosti písma; na displeji se přepínají tlačítky A / A+ / A++.
+# Větší písmo = řádky jako nadpisy markdownu (jiný způsob HA bez doplňků nemá).
+DISPLAY_SIZES = {  # klíč z appky -> (cesta pohledu, tlačítko, předpona řádku)
+    "normalni": ("recept", "A", "- "),
+    "velke": ("recept-velke", "A+", "### "),
+    "obri": ("recept-obri", "A++", "## "),
+}
 
-          {% for s in state_attr('sensor.mat_cooking_recept', 'suroviny') or [] -%}
-          - {{ s }}
-          {% endfor %}
-      - type: markdown
-        content: |
-          ## Postup
-          {% for s in state_attr('sensor.mat_cooking_recept', 'postup') or [] -%}
-          {{ loop.index }}. {{ s }}
-          {% endfor %}
-      - type: button
-        entity: sensor.mat_cooking_recept
-        name: Test dotyku - klepni sem
-        icon: mdi:gesture-tap
-        tap_action:
-          action: more-info
-"""
+
+def _dashboard_yaml() -> str:
+    attr = "state_attr('sensor.mat_cooking_recept', '{}')"
+    out = ["title: MAT-Cooking displej", "views:"]
+    for key, (path, label, prefix) in DISPLAY_SIZES.items():
+        buttons = []
+        for path2, label2, _ in DISPLAY_SIZES.values():
+            buttons += [
+                "              - type: button",
+                f"                name: \"{'● ' if path2 == path else ''}{label2}\"",
+                "                show_icon: false",
+                "                tap_action:",
+                "                  action: navigate",
+                f"                  navigation_path: /mat-cooking-displej/{path2}"]
+        step = "{{ loop.index }}. " if key == "normalni" else prefix + "{{ loop.index }}. "
+        out += [
+            f"  - title: Recept {label}",
+            f"    path: {path}",
+            "    type: panel",
+            "    cards:",
+            "      - type: vertical-stack",
+            "        cards:",
+            "          - type: horizontal-stack",
+            "            cards:",
+            *buttons,
+            "          - type: markdown",
+            "            content: |",
+            "              # {{ states('sensor.mat_cooking_recept') }}",
+            f"              **{{{{ {attr.format('info')} }}}}**",
+            "",
+            f"              {{% for s in {attr.format('suroviny')} or [] -%}}",
+            f"              {prefix}{{{{ s }}}}",
+            "              {% endfor %}",
+            "          - type: markdown",
+            "            content: |",
+            "              ## Postup",
+            "",
+            f"              {{% for s in {attr.format('postup')} or [] -%}}",
+            f"              {step}{{{{ s }}}}",
+            "              {% endfor %}",
+        ]
+    return "\n".join(out) + "\n"
+
+
+DISPLAY_DASHBOARD = _dashboard_yaml()
 
 
 def _display(body: dict) -> dict:
@@ -354,7 +380,8 @@ def _display(body: dict) -> dict:
     info = f"{portions} {'porce' if portions < 5 else 'porcí'}"
     if r["minutes"]:
         info += f' · {r["minutes"]} min'
-    ha.show_recipe(entity_id, r["name"], {
+    view = DISPLAY_SIZES.get(str(body.get("size") or ""), DISPLAY_SIZES["normalni"])[0]
+    ha.show_recipe(entity_id, view, r["name"], {
         "porce": portions, "info": info, "suroviny": items,
         "postup": [s.strip() for s in r["steps"].splitlines() if s.strip()],
         "poznamky": r["notes"],

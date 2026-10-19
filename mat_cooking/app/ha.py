@@ -94,7 +94,6 @@ def update_item(entity_id: str, item: dict, text: str, description: str) -> None
 # ----------------------------------------------------------------------
 DISPLAY_ENTITY = "sensor.mat_cooking_recept"
 DASHBOARD_PATH = "mat-cooking-displej"
-VIEW_PATH = "recept"
 
 
 def media_players() -> list[dict]:
@@ -109,7 +108,7 @@ def media_players() -> list[dict]:
     return sorted(out, key=lambda x: x["name"].lower())
 
 
-def show_recipe(entity_id: str, name: str, attributes: dict) -> None:
+def show_recipe(entity_id: str, view_path: str, name: str, attributes: dict) -> None:
     """Zapíše recept do entity a promítne na displej dashboard, který ji ukazuje."""
     if not entity_id.startswith("media_player."):
         raise HAError("Neplatný displej.")
@@ -118,4 +117,4 @@ def show_recipe(entity_id: str, name: str, attributes: dict) -> None:
           {"state": name[:255], "attributes": {"friendly_name": "MAT-Cooking recept",
                                                "icon": "mdi:chef-hat", **attributes}})
     _call("POST", "/services/cast/show_lovelace_view",
-          {"entity_id": entity_id, "dashboard_path": DASHBOARD_PATH, "view_path": VIEW_PATH})
+          {"entity_id": entity_id, "dashboard_path": DASHBOARD_PATH, "view_path": view_path})

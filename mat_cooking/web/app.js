@@ -219,7 +219,14 @@ function displayBox(r, getPortions) {
   api('api/displays').then((res) => {
     if (!res.available) return;
     let last = '';
-    try { last = localStorage.getItem('mat-cooking-display') || ''; } catch (e) { /* nevadí */ }
+    let lastSize = 'normalni';
+    try {
+      last = localStorage.getItem('mat-cooking-display') || '';
+      lastSize = localStorage.getItem('mat-cooking-display-size') || lastSize;
+    } catch (e) { /* nevadí */ }
+    const size = el('select', { title: 'Velikost písma na displeji (jde přepnout i na displeji)' },
+      ...[['normalni', 'Písmo A'], ['velke', 'Písmo A+'], ['obri', 'Písmo A++']].map(([k, v]) =>
+        el('option', { value: k, selected: k === lastSize }, v)));
     const select = el('select', {}, ...(res.displays.length ? res.displays.map((d) =>
       el('option', { value: d.entity_id, selected: d.entity_id === last }, d.name))
       : [el('option', { value: '' }, 'V HA není žádný displej')]));
@@ -228,15 +235,18 @@ function displayBox(r, getPortions) {
     send.addEventListener('click', async () => {
       send.disabled = true;
       try {
-        try { localStorage.setItem('mat-cooking-display', select.value); } catch (e) { /* nevadí */ }
+        try {
+          localStorage.setItem('mat-cooking-display', select.value);
+          localStorage.setItem('mat-cooking-display-size', size.value);
+        } catch (e) { /* nevadí */ }
         await api('api/display', { recipe_id: r.id, portions: getPortions(),
-          entity_id: select.value });
+          entity_id: select.value, size: size.value });
         toast(`Posláno na displej, porcí: ${getPortions()}. Načtení trvá i 10–20 s.`);
       } catch (e) { toast(e.message); } finally { send.disabled = false; }
     });
     const yaml = el('pre', { class: 'yaml' }, res.dashboard);
     box.replaceChildren(
-      el('div', { class: 'row' }, select, send),
+      el('div', { class: 'row' }, select, size, send),
       el('details', { class: 'small', style: 'margin-top:8px' },
         el('summary', { class: 'muted' }, 'Jak displej nastavit (jednou)'),
         el('ol', { class: 'small' },
