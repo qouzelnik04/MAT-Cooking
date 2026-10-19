@@ -31,7 +31,7 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import APP_NAME, APP_VERSION, ha
-from .display import Display, dashboard_yaml
+from .display import Display
 from .db import CATEGORIES, DB, InputError
 from .plan import item_text, parse_item, shopping_list
 from .units import UNITS
@@ -113,7 +113,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not ha.available():
                     return self._json({"available": False, "displays": []})
                 return self._json({"available": True, "displays": ha.media_players(),
-                                   "dashboard": dashboard_yaml(), **DISPLAY.status()})
+                                   **DISPLAY.status()})
             return self._err(404, "Taková adresa tu není.")
         except ha.HAError as exc:
             return self._err(502, str(exc))

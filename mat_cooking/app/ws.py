@@ -22,6 +22,15 @@ import urllib.parse
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
+def _xor(data: bytes, mask: bytes) -> bytes:
+    """Maskování rámce -- najednou přes celé číslo (dashboard s fotkami má i megabajty)."""
+    n = len(data)
+    if not n:
+        return data
+    key = (mask * (n // 4 + 1))[:n]
+    return (int.from_bytes(data, "big") ^ int.from_bytes(key, "big")).to_bytes(n, "big")
+
+
 class WebSocket:
     def __init__(self, url: str, timeout: float = 30):
         u = urllib.parse.urlparse(url)
@@ -65,7 +74,7 @@ class WebSocket:
         else:
             head += bytes([0x80 | 127]) + struct.pack(">Q", n)
         mask = os.urandom(4)
-        body = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+        body = _xor(data, mask)
         with self.wlock:
             self.sock.sendall(head + mask + body)
 
@@ -96,7 +105,7 @@ class WebSocket:
             mask = self._read(4) if b2 & 0x80 else None
             data = self._read(n)
             if mask:
-                data = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+                data = _xor(data, mask)
             if opcode == 0x8:
                 raise ConnectionError("Websocket: server spojení zavřel.")
             if opcode == 0x9:

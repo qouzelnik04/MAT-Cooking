@@ -27,19 +27,22 @@ je.
 
 ## Recept na displeji
 
-Tlačítko **📺 Na displej** v detailu receptu zapíše recept do entit
-`sensor.mat_cooking_recept` (název, porce, přepočtené suroviny, postup,
-poznámky) a `sensor.mat_cooking_recept_foto` (náhled fotky jako data: URL)
-a službou `cast.show_lovelace_view` promítne na zvolený `media_player`
-dashboard `mat-cooking-displej`. YAML dashboardu je v `app/display.py`
-(`dashboard_yaml`) a appka ho ukazuje ke zkopírování.
+Tlačítko **📺 Na displej** v detailu receptu promítne recept službou
+`cast.show_lovelace_view` na zvolený `media_player` (Google Nest Hub).
 
-Ovládání z displeje: appka si přes websocket API HA sama vytvoří pomocníky
-`input_select.mat_cooking_recept` (recepty, naplánované první) a
-`input_number.mat_cooking_porce` a sleduje jejich změny. Tlačítka na
-dashboardu (◀ ▶ recept, − + porce, A / A+ / A++ písmo) je přepínají a appka
-recept hned překreslí; po přepnutí receptu nastaví porce z plánu, jinak
-výchozí. Po restartu HA se appka znovu připojí a recept obnoví.
+Appka si v HA přes websocket API sama udržuje (`app/display.py`):
+
+- dashboard `mat-cooking-displej` -- vytvoří ho a přepíše při každé změně
+  receptů, fotek nebo plánu (mřížka receptů s fotkami, naplánované první),
+- pomocníky `input_select.mat_cooking_recept` (vybraný recept, nebo mřížka),
+  `input_number.mat_cooking_porce` a `input_select.mat_cooking_pismo`,
+- entity `sensor.mat_cooking_recept` (hotové HTML karet receptu) a
+  `sensor.mat_cooking_recept_foto` (náhled fotky jako data: URL).
+
+Klepnutí na displeji mění pomocníky, appka změny sleduje a recept hned
+překreslí; po výběru receptu nastaví porce z plánu, jinak výchozí. Karty jsou
+jen vestavěné (markdown, picture-glance, tile, button), nic z HACS. Po
+restartu HA se appka znovu připojí a vše obnoví.
 
 ## Vývoj na notebooku
 
@@ -54,7 +57,7 @@ nic se neinstaluje.
 | 1 | Recepty, katalog surovin, přepočet porcí | hotovo |
 | 2 | Plán vaření: výběr receptů a porcí, sečtení surovin, „mám doma“, odeslání do nákupního seznamu HA | hotovo |
 | 2b | Odkaz z plánu na recept s naplánovanými porcemi, doba přípravy, fotky, export/import receptů | hotovo |
-| 2c | Recept na displej (Google Nest Hub přes Cast), velikost písma, fotka a poznámky, výběr receptu a porcí přímo na displeji | hotovo |
+| 2c | Recept na displej (Google Nest Hub přes Cast), mřížka receptů, porce a písmo přímo na displeji, dashboard spravuje appka | hotovo |
 | 3 | Lednice a mrazák, upozornění | |
 
 ## Kde co je
