@@ -6,9 +6,12 @@ Recepty a plán vaření pro celou domácnost.
 
 Otevři **MAT-Cooking** v postranním panelu HA.
 
-- **Plán** — u receptů nastavíš, kolik porcí uvaříš. Suroviny se sečtou,
-  zaškrtneš, co máš doma, a zbytek pošleš do nákupního seznamu (seznamy
-  úkolů HA, např. Albert, Billa). Plán je společný pro celou domácnost.
+- **Plány** — každý si může udělat vlastní pojmenovaný plán (třeba
+  „Týden30“), nastavit recepty a porce a zaškrtat, co má doma. Tlačítko
+  **Nakoupit** pošle suroviny do hlavního nákupního seznamu v HA, sečtené
+  s ostatními plány. Co odškrtneš v plánu, se v seznamu zmenší nebo odškrtne,
+  a co odškrtneš v seznamu, je v plánech koupené. Uvařený plán dáš do
+  archivu (**Hotovo**), odkud jde zkopírovat.
 - **Recepty** — přidávání receptů se surovinami (množství + jednotka +
   surovina), postupem a poznámkami. Pořadí surovin změníš přetažením za
   úchyt ⠿ (myší i prstem). V detailu receptu jde přepočítat počet

@@ -1,5 +1,5 @@
 """
-Napojení na Home Assistant -- seznamy úkolů (nákupní seznamy).
+Napojení na Home Assistant -- REST API (nákupní seznam, stavy entit, služby).
 
 Add-on má v config.yaml `homeassistant_api: true`, takže od HA dostane
 token v proměnné SUPERVISOR_TOKEN a API HA je na http://supervisor/core/api.
@@ -53,19 +53,21 @@ def todo_lists() -> list[dict]:
     return sorted(out, key=lambda x: x["name"].lower())
 
 
-def open_items(entity_id: str) -> list[dict] | None:
-    """Nevyřízené položky seznamu [{summary, uid, description}]; None = nejde zjistit."""
+def _todo(entity_id: str) -> None:
     if not entity_id.startswith("todo."):
         raise HAError("Neplatný seznam.")
-    try:
-        res = _call("POST", "/services/todo/get_items?return_response",
-                    {"entity_id": entity_id, "status": ["needs_action"]})
-    except HAError:
-        return None
+
+
+def items(entity_id: str) -> list[dict]:
+    """Všechny položky seznamu (nevyřízené i odškrtnuté): [{uid, summary, status}]."""
+    _todo(entity_id)
+    res = _call("POST", "/services/todo/get_items?return_response",
+                {"entity_id": entity_id, "status": ["needs_action", "completed"]})
     return ((res or {}).get("service_response") or {}).get(entity_id, {}).get("items", [])
 
 
 def add_item(entity_id: str, text: str, description: str) -> None:
+    _todo(entity_id)
     body = {"entity_id": entity_id, "item": text}
     try:
         _call("POST", "/services/todo/add_item",
@@ -77,10 +79,11 @@ def add_item(entity_id: str, text: str, description: str) -> None:
         _call("POST", "/services/todo/add_item", body)
 
 
-def update_item(entity_id: str, item: dict, text: str, description: str) -> None:
-    """Přepíše existující položku (navýšení množství)."""
-    body = {"entity_id": entity_id, "item": item.get("uid") or item.get("summary"),
-            "rename": text}
+def update_item(entity_id: str, uid: str, text: str, description: str, done: bool) -> None:
+    """Přepíše položku (text, popis) a odškrtne ji, nebo vrátí mezi nevyřízené."""
+    _todo(entity_id)
+    body = {"entity_id": entity_id, "item": uid, "rename": text,
+            "status": "completed" if done else "needs_action"}
     try:
         _call("POST", "/services/todo/update_item",
               {**body, "description": description} if description else body)
@@ -88,6 +91,11 @@ def update_item(entity_id: str, item: dict, text: str, description: str) -> None
         if not description:
             raise
         _call("POST", "/services/todo/update_item", body)
+
+
+def remove_item(entity_id: str, uid: str) -> None:
+    _todo(entity_id)
+    _call("POST", "/services/todo/remove_item", {"entity_id": entity_id, "item": uid})
 
 
 # ----------------------------------------------------------------------

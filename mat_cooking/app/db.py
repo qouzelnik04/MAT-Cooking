@@ -82,6 +82,53 @@ MIGRATIONS = [
     ALTER TABLE recipes ADD COLUMN minutes INTEGER;
     ALTER TABLE recipes ADD COLUMN photo INTEGER NOT NULL DEFAULT 0;
     """,
+    # 5: víc pojmenovaných plánů (každý se svými recepty a "koupeno / mám
+    # doma") a jeden hlavní nákupní seznam v HA, kam plány po "Nakoupit"
+    # posílají sečtené suroviny. shop_items = položky, které v něm appka
+    # vede (uid v HA), aby šlo odškrtávání propisovat oběma směry.
+    # Dosavadní jediný plán se stane plánem "Můj plán".
+    """
+    CREATE TABLE plans (
+        id        INTEGER PRIMARY KEY,
+        name      TEXT NOT NULL,
+        author    TEXT NOT NULL DEFAULT '',
+        created   TEXT NOT NULL,
+        archived  TEXT,                    -- kdy šel do archivu; NULL = aktivní
+        shopping  INTEGER NOT NULL DEFAULT 0   -- 1 = suroviny jsou v hlavním seznamu
+    );
+    CREATE TABLE plan_recipes (
+        plan_id    INTEGER NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+        recipe_id  INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+        portions   INTEGER NOT NULL,
+        PRIMARY KEY (plan_id, recipe_id)
+    );
+    CREATE TABLE plan_bought (
+        plan_id  INTEGER NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+        key      TEXT NOT NULL,            -- surovina|skupina jednotek, viz plan.py
+        PRIMARY KEY (plan_id, key)
+    );
+    CREATE TABLE shop_items (
+        key          TEXT PRIMARY KEY,
+        uid          TEXT NOT NULL,        -- id položky v seznamu HA
+        text         TEXT NOT NULL,
+        description  TEXT NOT NULL,
+        done         INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE settings (
+        key    TEXT PRIMARY KEY,
+        value  TEXT NOT NULL
+    );
+    INSERT INTO plans (id, name, created)
+        SELECT 1, 'Můj plán', strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+        WHERE EXISTS (SELECT 1 FROM plan);
+    INSERT INTO plan_recipes (plan_id, recipe_id, portions)
+        SELECT 1, recipe_id, portions FROM plan WHERE EXISTS (SELECT 1 FROM plans WHERE id = 1);
+    INSERT INTO plan_bought (plan_id, key)
+        SELECT 1, key FROM plan_have WHERE EXISTS (SELECT 1 FROM plans WHERE id = 1);
+    DROP TABLE plan;
+    DROP TABLE plan_have;
+    DROP TABLE plan_sent;
+    """,
 ]
 
 
@@ -305,52 +352,157 @@ class DB:
             return "renamed"
 
     # ------------------------------------------------------------------
-    # Plán vaření
+    # Plány vaření
     # ------------------------------------------------------------------
-    def plan_rows(self) -> tuple[list[dict], list[dict], set[str], dict[str, str]]:
-        """(recepty v plánu, jejich suroviny, klíče 'mám doma', co už odešlo)."""
+    def list_plans(self) -> list[dict]:
+        """Všechny plány (aktivní i archiv) s počtem receptů, nejnovější první."""
+        with self.lock:
+            rows = self._con.execute(
+                "SELECT p.*, (SELECT COUNT(*) FROM plan_recipes r WHERE r.plan_id = p.id) "
+                "AS recipes FROM plans p ORDER BY p.archived IS NOT NULL, "
+                "COALESCE(p.archived, p.created) DESC, p.id DESC").fetchall()
+        return [dict(r) | {"shopping": bool(r["shopping"])} for r in rows]
+
+    def get_plan(self, pid: int) -> dict:
+        with self.lock:
+            row = self._con.execute("SELECT * FROM plans WHERE id=?", (pid,)).fetchone()
+        if not row:
+            raise InputError("Plán neexistuje (možná ho někdo smazal).")
+        return dict(row) | {"shopping": bool(row["shopping"])}
+
+    @staticmethod
+    def _plan_name(name: str) -> str:
+        name = str(name or "").strip()
+        if not name:
+            raise InputError("Plán potřebuje název.")
+        if len(name) > 80:
+            raise InputError("Název plánu je moc dlouhý (nejvýš 80 znaků).")
+        return name
+
+    def create_plan(self, name: str, author: str = "") -> int:
+        name = self._plan_name(name)
+        with self.lock, self._con:
+            return self._con.execute("INSERT INTO plans (name, author, created) VALUES (?, ?, ?)",
+                                     (name, author[:80], _now())).lastrowid
+
+    def copy_plan(self, pid: int, author: str = "") -> int:
+        """Kopie receptů a porcí (bez "koupeno") -- uvařit znovu."""
+        src = self.get_plan(pid)
+        with self.lock, self._con:
+            new = self._con.execute("INSERT INTO plans (name, author, created) VALUES (?, ?, ?)",
+                                    (f'{src["name"]} (kopie)'[:80], author[:80], _now())).lastrowid
+            self._con.execute("INSERT INTO plan_recipes (plan_id, recipe_id, portions) "
+                              "SELECT ?, recipe_id, portions FROM plan_recipes WHERE plan_id=?",
+                              (new, pid))
+        return new
+
+    def rename_plan(self, pid: int, name: str) -> None:
+        name = self._plan_name(name)
+        self.get_plan(pid)
+        with self.lock, self._con:
+            self._con.execute("UPDATE plans SET name=? WHERE id=?", (name, pid))
+
+    def archive_plan(self, pid: int, archived: bool) -> None:
+        """Do archivu (uvařeno) nebo zpět. Archivovaný plán nenakupuje."""
+        self.get_plan(pid)
+        with self.lock, self._con:
+            self._con.execute("UPDATE plans SET archived=?, shopping=CASE WHEN ? THEN 0 "
+                              "ELSE shopping END WHERE id=?",
+                              (_now() if archived else None, archived, pid))
+
+    def delete_plan(self, pid: int) -> None:
+        with self.lock, self._con:
+            self._con.execute("DELETE FROM plans WHERE id=?", (pid,))
+
+    def set_shopping(self, pid: int, on: bool) -> None:
+        plan = self.get_plan(pid)
+        if on and plan["archived"]:
+            raise InputError("Plán je v archivu -- nejdřív ho vrať zpátky.")
+        with self.lock, self._con:
+            self._con.execute("UPDATE plans SET shopping=? WHERE id=?", (int(on), pid))
+
+    def plan_rows(self, pid: int) -> tuple[list[dict], list[dict], set[str]]:
+        """(recepty v plánu, jejich suroviny, klíče "koupeno / mám doma")."""
         with self.lock:
             recipes = self._con.execute(
                 "SELECT r.id, r.name, r.category, r.servings, p.portions "
-                "FROM plan p JOIN recipes r ON r.id = p.recipe_id "
-                "ORDER BY r.name COLLATE NOCASE").fetchall()
+                "FROM plan_recipes p JOIN recipes r ON r.id = p.recipe_id "
+                "WHERE p.plan_id = ? ORDER BY r.name COLLATE NOCASE", (pid,)).fetchall()
             items = self._con.execute(
                 "SELECT i.recipe_id, i.amount, i.unit, g.id AS ingredient_id, "
                 "g.name AS ingredient FROM recipe_items i "
                 "JOIN ingredients g ON g.id = i.ingredient_id "
-                "WHERE i.recipe_id IN (SELECT recipe_id FROM plan)").fetchall()
-            have = {r["key"] for r in self._con.execute("SELECT key FROM plan_have")}
-            sent = {r["key"]: r["base"] for r in self._con.execute("SELECT * FROM plan_sent")}
-        return [dict(r) for r in recipes], [dict(i) for i in items], have, sent
+                "WHERE i.recipe_id IN (SELECT recipe_id FROM plan_recipes WHERE plan_id = ?)",
+                (pid,)).fetchall()
+            bought = {r["key"] for r in self._con.execute(
+                "SELECT key FROM plan_bought WHERE plan_id = ?", (pid,))}
+        return [dict(r) for r in recipes], [dict(i) for i in items], bought
 
-    def mark_sent(self, sent: dict[str, str]) -> None:
-        with self.lock, self._con:
-            self._con.executemany(
-                "INSERT INTO plan_sent (key, base) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET base = excluded.base", sent.items())
+    def active_plan_recipes(self) -> list[dict]:
+        """Recepty ve všech aktivních plánech: [{plan_id, plan, id, portions}]."""
+        with self.lock:
+            rows = self._con.execute(
+                "SELECT p.id AS plan_id, p.name AS plan, r.recipe_id AS id, r.portions "
+                "FROM plans p JOIN plan_recipes r ON r.plan_id = p.id "
+                "WHERE p.archived IS NULL ORDER BY p.created DESC, p.id DESC").fetchall()
+        return [dict(r) for r in rows]
 
-    def set_portions(self, rid: int, portions: int) -> None:
+    def shopping_plans(self) -> list[dict]:
+        """Aktivní plány, které nakupují (po "Nakoupit")."""
+        return [p for p in self.list_plans() if p["shopping"] and not p["archived"]]
+
+    def set_portions(self, pid: int, rid: int, portions: int) -> None:
+        self.get_plan(pid)
         with self.lock, self._con:
             if portions > 0:
                 self._con.execute(
-                    "INSERT INTO plan (recipe_id, portions) VALUES (?, ?) "
-                    "ON CONFLICT(recipe_id) DO UPDATE SET portions = excluded.portions",
-                    (rid, portions))
+                    "INSERT INTO plan_recipes (plan_id, recipe_id, portions) VALUES (?, ?, ?) "
+                    "ON CONFLICT(plan_id, recipe_id) DO UPDATE SET portions = excluded.portions",
+                    (pid, rid, portions))
             else:
-                self._con.execute("DELETE FROM plan WHERE recipe_id = ?", (rid,))
+                self._con.execute("DELETE FROM plan_recipes WHERE plan_id=? AND recipe_id=?",
+                                  (pid, rid))
 
-    def set_have(self, key: str, have: bool) -> None:
+    def set_bought(self, pid: int, key: str, bought: bool) -> None:
         with self.lock, self._con:
-            if have:
-                self._con.execute("INSERT OR IGNORE INTO plan_have (key) VALUES (?)", (key,))
+            if bought:
+                self._con.execute("INSERT OR IGNORE INTO plan_bought (plan_id, key) VALUES (?, ?)",
+                                  (pid, key))
             else:
-                self._con.execute("DELETE FROM plan_have WHERE key = ?", (key,))
+                self._con.execute("DELETE FROM plan_bought WHERE plan_id=? AND key=?", (pid, key))
 
-    def clear_plan(self) -> None:
+    # ------------------------------------------------------------------
+    # Hlavní nákupní seznam v HA (viz shopping.py) a nastavení
+    # ------------------------------------------------------------------
+    def shop_items(self) -> dict[str, dict]:
+        with self.lock:
+            return {r["key"]: dict(r) for r in self._con.execute("SELECT * FROM shop_items")}
+
+    def save_shop_item(self, key: str, uid: str, text: str, description: str, done: bool) -> None:
         with self.lock, self._con:
-            self._con.execute("DELETE FROM plan")
-            self._con.execute("DELETE FROM plan_have")
-            self._con.execute("DELETE FROM plan_sent")
+            self._con.execute(
+                "INSERT INTO shop_items (key, uid, text, description, done) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET uid=excluded.uid, text=excluded.text, "
+                "description=excluded.description, done=excluded.done",
+                (key, uid, text, description, int(done)))
+
+    def delete_shop_item(self, key: str) -> None:
+        with self.lock, self._con:
+            self._con.execute("DELETE FROM shop_items WHERE key=?", (key,))
+
+    def clear_shop_items(self) -> None:
+        with self.lock, self._con:
+            self._con.execute("DELETE FROM shop_items")
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        with self.lock:
+            row = self._con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.lock, self._con:
+            self._con.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                              "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
 
     def delete_ingredient(self, iid: int) -> None:
         with self.lock, self._con:

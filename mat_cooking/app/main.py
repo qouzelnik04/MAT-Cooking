@@ -26,14 +26,14 @@ import traceback
 import unicodedata
 import urllib.parse
 import webbrowser
-from decimal import Decimal
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import APP_NAME, APP_VERSION, ha
 from .display import Display
 from .db import CATEGORIES, DB, InputError
-from .plan import item_text, parse_item, shopping_list
+from .plan import shopping_list
+from .shopping import Shopping
 from .units import UNITS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -44,9 +44,7 @@ ALLOW_ONLY = {ip.strip() for ip in (os.environ.get("MAT_ALLOW_ONLY") or "").spli
 
 DATA: DB | None = None
 DISPLAY: Display | None = None
-# Odeslání do nákupního seznamu najednou jen jedno -- dva lidé ve stejnou
-# chvíli by jinak poslali stejný přírůstek dvakrát.
-SEND_LOCK = threading.Lock()
+SHOPPING: Shopping | None = None
 HOST = os.environ.get("MAT_HOST") or "127.0.0.1"
 PORT = int(os.environ.get("MAT_PORT") or 8720)
 
@@ -74,6 +72,19 @@ class Handler(BaseHTTPRequestHandler):
             self._err(403, "Zápis je dovolený jen z vlastní stránky appky.")
             return False
         return True
+
+    def _user(self) -> str:
+        """Kdo je přihlášený v HA -- Ingress to posílá v hlavičce. Lokálně nikdo."""
+        if not ALLOW_ONLY:
+            return ""
+        name = (self.headers.get("X-Remote-User-Display-Name")
+                or self.headers.get("X-Remote-User-Name") or "")
+        try:
+            # http.server čte hlavičky jako latin-1, HA posílá UTF-8 (Novák, Šťastná)
+            name = name.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+        return name[:80]
 
     # ------------------------------------------------------------------
     def do_GET(self):
@@ -103,8 +114,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._export(int(rid) if rid.isdigit() else None)
             if path == "/api/ingredients":
                 return self._json(DATA.list_ingredients())
-            if path == "/api/plan":
-                return self._json(_plan())
+            if path == "/api/plans":
+                return self._json(_plans())
+            m = re.fullmatch(r"/api/plans/(\d+)", path)
+            if m:
+                SHOPPING.sync()             # odškrtnuté v HA ať je vidět hned
+                return self._json(_plan(int(m.group(1))))
             if path == "/api/lists":
                 if not ha.available():
                     return self._json({"available": False, "lists": []})
@@ -115,6 +130,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"available": True, "displays": ha.media_players(),
                                    **DISPLAY.status()})
             return self._err(404, "Taková adresa tu není.")
+        except InputError as exc:
+            return self._err(400, str(exc))
         except ha.HAError as exc:
             return self._err(502, str(exc))
         except Exception as exc:            # noqa: BLE001
@@ -151,22 +168,20 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 DATA.delete_ingredient(int(m.group(1)))
                 return self._json({"ok": True})
-            if path == "/api/plan/portions":
-                DATA.set_portions(int(body.get("recipe_id")), max(0, int(body.get("portions") or 0)))
-                return self._json(_plan())
-            if path == "/api/plan/have":
-                DATA.set_have(str(body.get("key") or ""), bool(body.get("have")))
+            if path == "/api/plans":
+                return self._json({"id": DATA.create_plan(str(body.get("name") or ""),
+                                                          self._user())})
+            m = re.fullmatch(r"/api/plans/(\d+)/(\w+)", path)
+            if m:
+                return self._json(_plan_action(int(m.group(1)), m.group(2), body, self._user()))
+            if path == "/api/settings/list":
+                SHOPPING.set_entity(str(body.get("entity_id") or ""))
+                DISPLAY.reconnect()         # sledovat změny v novém seznamu
                 return self._json({"ok": True})
-            if path == "/api/plan/clear":
-                DATA.clear_plan()
-                return self._json(_plan())
             if path == "/api/display":
                 DISPLAY.show(str(body.get("entity_id") or ""), int(body.get("recipe_id") or 0),
                              body.get("portions"), str(body.get("size") or ""))
                 return self._json({"ok": True})
-            if path == "/api/plan/send":
-                with SEND_LOCK:
-                    return self._json(_send(str(body.get("entity_id") or "")))
             return self._err(404, "Taková adresa tu není.")
         except InputError as exc:
             return self._err(400, str(exc))
@@ -176,9 +191,9 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             return self._err(500, f"Chyba na serveru: {exc}")
         finally:
-            if path.startswith(("/api/recipes", "/api/import", "/api/plan/portions",
-                                "/api/plan/clear", "/api/ingredients")):
+            if path.startswith(("/api/recipes", "/api/import", "/api/plans", "/api/ingredients")):
                 DISPLAY.request_sync()  # výběr receptů na displeji podle nového stavu
+                SHOPPING.request()      # hlavní nákupní seznam podle plánů
 
     # ------------------------------------------------------------------
     def _index(self) -> None:
@@ -308,55 +323,46 @@ def _import(body: dict) -> dict:
     return {"added": [rec["name"] for _, rec in added], "skipped": skipped}
 
 
-def _plan() -> dict:
-    recipes, items, have, sent = DATA.plan_rows()
-    return {"recipes": recipes, "shopping": shopping_list(recipes, items, have, sent),
-            "ha": ha.available()}
+def _plans() -> dict:
+    return {"plans": DATA.list_plans(), "ha": ha.available(),
+            "list": SHOPPING.entity(), "error": SHOPPING.error}
 
 
-def _send(entity_id: str) -> dict:
-    """Chybějící suroviny z plánu do nákupního seznamu v HA.
+def _plan(pid: int) -> dict:
+    recipes, items, bought = DATA.plan_rows(pid)
+    plan = DATA.get_plan(pid)
+    shop = DATA.shop_items() if plan["shopping"] else {}
+    rows = shopping_list(recipes, items, bought)
+    for r in rows:
+        r["in_list"] = r["key"] in shop and not shop[r["key"]]["done"]
+    return {"plan": plan, "recipes": recipes, "shopping": rows, "ha": ha.available(),
+            "list": SHOPPING.entity(), "error": SHOPPING.error}
 
-    Posílá se jen to, co z plánu ještě neodešlo. Když v seznamu už je
-    nevyřízená položka té suroviny (ve tvaru, jaký appka píše), navýší se
-    -- kuřecí 200 g + 200 g = jedna položka 400 g, ne dvě.
-    """
-    if not ha.available():
-        raise InputError("Appka neběží v Home Assistantu -- seznam zkopíruj ručně.")
-    rows = [r for r in _plan()["shopping"] if not r["have"] and r["to_send"]]
-    if not rows:
-        raise InputError("Není co poslat -- všechno chybějící už v seznamu je.")
-    existing = ha.open_items(entity_id)
-    known = {r["ingredient"].lower() for r in rows}
-    open_texts = {str(it.get("summary", "")).strip().lower() for it in existing or []}
-    parsed = []
-    for it in existing or []:
-        p = parse_item(str(it.get("summary", "")), known)
-        if p:
-            parsed.append((p, it))
-    added, updated, sent = [], [], {}
-    try:
-        for r in rows:
-            pending = Decimal(r["pending"]) if r["pending"] else None
-            note = "Pro: " + ", ".join(r["recipes"])
-            match = next(((p, it) for p, it in parsed
-                          if p[0] == r["ingredient"].lower() and p[1] == r["group"]), None)
-            if pending is None and r["ingredient"].lower() in open_texts:
-                pass                # sůl apod. bez množství už v seznamu je
-            elif pending is not None and match:
-                (_, group, base), it = match
-                text = item_text(r["ingredient"], group, base + pending)
-                ha.update_item(entity_id, it, text, note)
-                updated.append(text)
-            else:
-                text = item_text(r["ingredient"], r["group"], pending)
-                ha.add_item(entity_id, text, note)
-                added.append(text)
-            sent[r["key"]] = r["base"]
-    finally:
-        # I když HA uprostřed selže, zapamatuje se, co už odešlo
-        DATA.mark_sent(sent)
-    return {"added": added, "updated": updated}
+
+def _plan_action(pid: int, action: str, body: dict, user: str) -> dict:
+    if action == "portions":
+        DATA.set_portions(pid, int(body.get("recipe_id") or 0),
+                          max(0, int(body.get("portions") or 0)))
+    elif action == "have":
+        DATA.get_plan(pid)
+        DATA.set_bought(pid, str(body.get("key") or ""), bool(body.get("have")))
+    elif action == "rename":
+        DATA.rename_plan(pid, str(body.get("name") or ""))
+    elif action == "shopping":
+        on = bool(body.get("on"))
+        if on and ha.available() and not SHOPPING.entity():
+            raise InputError("Nejdřív vyber hlavní nákupní seznam.")
+        DATA.set_shopping(pid, on)
+    elif action == "archive":
+        DATA.archive_plan(pid, bool(body.get("archived", True)))
+    elif action == "copy":
+        return {"id": DATA.copy_plan(pid, user)}
+    elif action == "delete":
+        DATA.delete_plan(pid)
+        return {"ok": True}
+    else:
+        raise InputError("Neznámá akce s plánem.")
+    return _plan(pid)
 
 
 def _free_port(preferred: int) -> int:
@@ -373,7 +379,7 @@ def _free_port(preferred: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    global DATA, DISPLAY, PORT
+    global DATA, DISPLAY, SHOPPING, PORT
     ap = argparse.ArgumentParser(description=f"{APP_NAME} -- recepty a plán vaření")
     ap.add_argument("--data", default=os.environ.get("MAT_DATA") or
                     os.path.join(ROOT, "..", "devdata"),
@@ -383,7 +389,8 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     DATA = DB(os.path.abspath(args.data))
-    DISPLAY = Display(DATA)
+    SHOPPING = Shopping(DATA)
+    DISPLAY = Display(DATA, SHOPPING)
     if args.port:
         PORT = args.port
     elif not ALLOW_ONLY:
@@ -398,6 +405,7 @@ def main(argv: list[str] | None = None) -> int:
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     srv.daemon_threads = True
     DISPLAY.start()
+    SHOPPING.start()
     if not args.bez_prohlizece:
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()
     try:

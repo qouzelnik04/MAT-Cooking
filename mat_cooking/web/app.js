@@ -74,8 +74,8 @@ async function resizeJpeg(file, max) {
 
 /* Tlačítko, které se napoprvé zeptá a smaže až napodruhé (confirm() v okně
    HA nemusí fungovat). */
-function confirmButton(label, ask, action) {
-  const b = el('button', { class: 'btn danger' }, label);
+function confirmButton(label, ask, action, small = false) {
+  const b = el('button', { class: 'btn danger' + (small ? ' small' : '') }, label);
   let armed = false;
   b.addEventListener('click', async () => {
     if (!armed) {
@@ -100,7 +100,7 @@ async function route() {
     else if (name === 'upravit') view.replaceChildren(await editView(+arg));
     else if (name === 'novy') view.replaceChildren(await editView(null));
     else if (name === 'suroviny') view.replaceChildren(await ingredientsView());
-    else if (name === 'plan') view.replaceChildren(await planView());
+    else if (name === 'plan') view.replaceChildren(await planView(+arg || 0));
     else view.replaceChildren(await listView());
   } catch (e) {
     view.replaceChildren(el('p', { class: 'error' }, 'Chyba: ' + e.message));
@@ -412,12 +412,84 @@ async function editView(id) {
 }
 
 /* ================================================================ PLÁN */
-/* Nedělní vaření: kolik porcí čeho -> sečtené suroviny -> co mám doma ->
-   zbytek do nákupního seznamu v HA. Plán je společný pro celou domácnost. */
-async function planView() {
-  const [recipes, plan] = await Promise.all([api('api/recipes'), api('api/plan')]);
-  let state = plan;
+/* Víc pojmenovaných plánů (každý svoje recepty, porce a "koupeno"), viditelné
+   pro celou domácnost. Po "Nakoupit" jdou suroviny plánu do hlavního
+   nákupního seznamu v HA, sečtené se surovinami ostatních plánů; odškrtnutí
+   tady i v HA se propisuje oběma směry (dělá to server, viz shopping.py). */
+const PLAN_KEY = 'mat-cooking-plan';
+const dateText = (iso) => (iso ? new Date(iso).toLocaleDateString('cs-CZ') : '');
+
+function weekName() {
+  const d = new Date();
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+  const week = Math.ceil(((t - Date.UTC(t.getUTCFullYear(), 0, 1)) / 864e5 + 1) / 7);
+  return `Týden ${week}`;
+}
+
+async function planView(pidArg) {
+  const all = await api('api/plans');
+  const active = all.plans.filter((p) => !p.archived);
+  const archived = all.plans.filter((p) => p.archived);
+  let pid = pidArg;
+  if (!pid) {
+    let last = 0;
+    try { last = +localStorage.getItem(PLAN_KEY) || 0; } catch (e) { /* nevadí */ }
+    pid = (active.find((p) => p.id === last) || active[0] || {}).id || 0;
+  }
+  try { if (pid) localStorage.setItem(PLAN_KEY, pid); } catch (e) { /* nevadí */ }
+
+  const newPlan = () => {
+    const name = el('input', { value: weekName(), placeholder: 'Název plánu', maxlength: 80 });
+    const create = el('button', { class: 'btn primary', type: 'submit' }, 'Vytvořit');
+    const form = el('form', { class: 'row new-plan' }, name, create);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        const res = await api('api/plans', { name: name.value });
+        location.hash = `#plan/${res.id}`;
+      } catch (err) { toast(err.message); }
+    });
+    return form;
+  };
+  const newBox = el('div', { hidden: true });
+  const tabs = el('div', { class: 'plan-tabs' },
+    ...active.map((p) => el('a', { href: `#plan/${p.id}`, class: p.id === pid ? 'on' : '' },
+      p.name, p.shopping ? ' 🛒' : '', p.author ? el('small', {}, p.author) : null)),
+    el('button', { class: 'btn small', onclick: () => {
+      newBox.hidden = !newBox.hidden;
+      if (!newBox.hidden) { newBox.replaceChildren(newPlan()); newBox.querySelector('input').select(); }
+    } }, '+ Nový plán'));
+
+  const archiveBox = archived.length ? el('details', { class: 'card archive' },
+    el('summary', {}, `Archiv (${archived.length})`),
+    ...archived.map((p) => el('div', { class: 'plan-row' },
+      el('div', { class: 'spacer' }, el('a', { href: `#plan/${p.id}` }, el('b', {}, p.name)),
+        el('span', { class: 'muted small' }, ` · ${p.recipes} receptů · uvařeno ${dateText(p.archived)}`
+          + (p.author ? ` · ${p.author}` : ''))),
+      el('button', { class: 'btn small', onclick: async () => {
+        const res = await api(`api/plans/${p.id}/copy`, {});
+        location.hash = `#plan/${res.id}`; toast('Zkopírováno -- uvař znovu.');
+      } }, 'Kopírovat')))) : null;
+
+  const head = el('div', {},
+    el('div', { class: 'row' }, el('h1', {}, 'Plány vaření')), tabs, newBox);
+  if (!pid) {
+    newBox.hidden = false;
+    newBox.replaceChildren(newPlan());
+    return el('div', {}, head,
+      el('p', { class: 'muted' }, 'Zatím tu není žádný plán. Pojmenuj ho a vytvoř — '
+        + 'každý (ty i spolubydlící) si může udělat vlastní.'), archiveBox);
+  }
+  return el('div', {}, head, await planDetail(pid), archiveBox);
+}
+
+async function planDetail(pid) {
+  const [recipes, first] = await Promise.all([api('api/recipes'), api(`api/plans/${pid}`)]);
+  let state = first;
+  const root = el('div', {});
   const portionsOf = () => Object.fromEntries(state.recipes.map((r) => [r.id, r.portions]));
+  const headBox = el('div', {});
   const recipeBox = el('div', {});
   const shopBox = el('div', {});
   const filter = el('input', { type: 'search', placeholder: 'Hledat recept…' });
@@ -425,14 +497,66 @@ async function planView() {
   // jinak by řádek po kliknutí na + uskočil a další klik trefil jiný recept.
   const initial = portionsOf();
   const order = recipes.slice().sort((a, b) => (initial[b.id] ? 1 : 0) - (initial[a.id] ? 1 : 0));
+  const act = async (action, body = {}) => {
+    try {
+      state = await api(`api/plans/${pid}/${action}`, body);
+      paintHead(); paintRecipes(); paintShop();
+    } catch (e) { toast(e.message); }
+  };
 
-  const setPortions = async (rid, n) => {
-    state = await api('api/plan/portions', { recipe_id: rid, portions: n });
-    paintRecipes(); paintShop();
+  const paintHead = () => {
+    const p = state.plan;
+    const title = el('h2', { class: 'plan-title' }, p.name);
+    const rename = el('button', { class: 'btn small', title: 'Přejmenovat' }, '✎');
+    rename.addEventListener('click', () => {
+      const input = el('input', { value: p.name, maxlength: 80 });
+      const form = el('form', { class: 'row' }, input,
+        el('button', { class: 'btn primary small', type: 'submit' }, 'Uložit'));
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await act('rename', { name: input.value });
+        route();
+      });
+      title.replaceWith(form); rename.remove(); input.select();
+    });
+    headBox.replaceChildren(
+      el('div', { class: 'row' }, title, rename, el('div', { class: 'spacer' }),
+        el('button', { class: 'btn small', onclick: async () => {
+          const res = await api(`api/plans/${pid}/copy`, {});
+          location.hash = `#plan/${res.id}`; toast('Plán zkopírován.');
+        } }, 'Kopírovat'),
+        p.archived
+          ? el('button', { class: 'btn small', onclick: async () => {
+            await act('archive', { archived: false }); route(); } }, 'Vrátit z archivu')
+          : el('button', { class: 'btn small', title: 'Uvařeno -- plán půjde do archivu',
+            onclick: async () => { await act('archive', { archived: true });
+              try { localStorage.removeItem(PLAN_KEY); } catch (e) { /* nevadí */ }
+              location.hash = '#plan'; toast('Plán je v archivu.'); } }, '✓ Hotovo'),
+        confirmButton('Smazat', 'Opravdu smazat?', async () => {
+          await api(`api/plans/${pid}/delete`, {});
+          try { localStorage.removeItem(PLAN_KEY); } catch (e) { /* nevadí */ }
+          location.hash = '#plan'; toast('Plán smazán.');
+        }, true)),
+      el('p', { class: 'muted small', style: 'margin:0' },
+        [p.author ? `Vytvořil(a) ${p.author}` : '', `založeno ${dateText(p.created)}`,
+          p.archived ? `v archivu od ${dateText(p.archived)}` : ''].filter(Boolean).join(' · ')));
+  };
+
+  /* Porce: počítá se z toho, co uživatel naklikal (want), ne z doby
+     vykreslení -- rychlé dvojí klepnutí na + je +2. Požadavky jdou za sebou,
+     ať pozdější odpověď nepřepíše novější stav. */
+  const want = {};
+  let queue = Promise.resolve();
+  const step = (rid, d) => {
+    const n = Math.max(0, (want[rid] ?? portionsOf()[rid] ?? 0) + d);
+    want[rid] = n;
+    paintRecipes();
+    queue = queue.then(() => act('portions', { recipe_id: rid, portions: n }))
+      .then(() => { if (want[rid] === n) delete want[rid]; });
   };
 
   const paintRecipes = () => {
-    const p = portionsOf();
+    const p = { ...portionsOf(), ...want };
     const q = filter.value.toLowerCase();
     const list = order.filter((r) => !q || r.name.toLowerCase().includes(q));
     recipeBox.replaceChildren(...(list.length ? list.map((r) => {
@@ -443,98 +567,106 @@ async function planView() {
             : el('b', {}, r.name), ' ',
           el('span', { class: 'chip' }, catName(r.category))),
         el('div', { class: 'stepper' },
-          el('button', { onclick: () => setPortions(r.id, Math.max(0, n - 1)),
-            disabled: !n, 'aria-label': 'méně porcí' }, '−'),
+          el('button', { onclick: () => step(r.id, -1),
+            disabled: !n || !!state.plan.archived, 'aria-label': 'méně porcí' }, '−'),
           el('b', {}, n),
-          el('button', { onclick: () => setPortions(r.id, n + 1), 'aria-label': 'více porcí' }, '+')));
+          el('button', { onclick: () => step(r.id, 1),
+            disabled: !!state.plan.archived, 'aria-label': 'více porcí' }, '+')));
     }) : [el('p', { class: 'muted' }, recipes.length ? 'Nic nenalezeno.'
       : 'Nejdřív přidej recepty.')]));
   };
 
   const qtyText = (r) => (r.amount ? `${fmtAmount(parseFloat(r.amount))} ${r.unit}` : '');
 
-  const sendBox = (missing, missingAll) => {
-    if (!missingAll) return el('p', {}, '✓ Všechno máš doma.');
-    if (!missing.length) return el('p', {}, '✓ Všechno chybějící už je v nákupním seznamu.');
+  /* Hlavní nákupní seznam (jeden pro všechny plány) -- nastavení appky */
+  const listPicker = () => {
+    const select = el('select', {}, el('option', { value: '' }, 'Načítám seznamy…'));
+    api('api/lists').then((res) => {
+      select.replaceChildren(el('option', { value: '' }, '— vyber seznam —'),
+        ...res.lists.map((l) => el('option', { value: l.entity_id, selected: l.entity_id === state.list },
+          l.name)));
+    }).catch((e) => toast(e.message));
+    select.addEventListener('change', async () => {
+      await api('api/settings/list', { entity_id: select.value });
+      state = await api(`api/plans/${pid}`); paintShop(); toast('Hlavní nákupní seznam uložen.');
+    });
+    return el('label', { class: 'row small muted' }, 'Hlavní nákupní seznam v HA:', select);
+  };
+
+  const shopActions = (missing) => {
+    const p = state.plan;
     if (!state.ha) {
+      if (!missing.length) return null;
       const text = missing.map((r) => `${r.ingredient} ${qtyText(r)}`.trim()).join('\n');
       return el('div', { style: 'margin-top:12px' },
-        el('p', { class: 'muted small' }, 'Appka neběží v Home Assistantu, takže seznam '
-          + 'neodešle. Můžeš ho zkopírovat:'),
+        el('p', { class: 'muted small' }, 'Appka neběží v Home Assistantu, takže do nákupního '
+          + 'seznamu neposílá. Můžeš ho zkopírovat:'),
         el('textarea', { readonly: true, style: 'min-height:100px' }, text),
         el('button', { class: 'btn', onclick: async () => {
           await navigator.clipboard.writeText(text); toast('Zkopírováno.');
         } }, 'Zkopírovat'));
     }
-    const select = el('select', {}, el('option', { value: '' }, 'Načítám seznamy…'));
-    const send = el('button', { class: 'btn primary', disabled: true },
-      `Poslat ${missing.length} do seznamu`);
-    api('api/lists').then((res) => {
-      let last = '';
-      try { last = localStorage.getItem('mat-cooking-list') || ''; } catch (e) { /* nevadí */ }
-      select.replaceChildren(...(res.lists.length ? res.lists.map((l) =>
-        el('option', { value: l.entity_id, selected: l.entity_id === last }, l.name))
-        : [el('option', { value: '' }, 'V HA nejsou žádné seznamy úkolů')]));
-      send.disabled = !res.lists.length;
-    }).catch((e) => toast(e.message));
-    send.addEventListener('click', async () => {
-      send.disabled = true;
-      try {
-        try { localStorage.setItem('mat-cooking-list', select.value); } catch (e) { /* nevadí */ }
-        const res = await api('api/plan/send', { entity_id: select.value });
-        const name = select.options[select.selectedIndex].text;
-        toast(`${name}: přidáno ${res.added.length}`
-          + (res.updated.length ? `, navýšeno ${res.updated.length}` : '') + '.');
-        state = await api('api/plan');
-        paintShop();
-      } catch (e) { toast(e.message); send.disabled = false; }
-    });
-    return el('div', { class: 'row', style: 'margin-top:12px' }, select, send);
+    const out = [];
+    if (p.archived) {
+      out.push(el('p', { class: 'muted small' }, 'Plán je v archivu — nenakupuje.'));
+    } else if (p.shopping) {
+      out.push(el('p', { class: 'small' }, '🛒 Suroviny jsou v hlavním nákupním seznamu. '
+        + 'Co odškrtneš tady, se tam zmenší nebo odškrtne, a naopak.'),
+      confirmButton('Zrušit nákup', 'Nekoupené zmizí ze seznamu', () => act('shopping', { on: false })));
+    } else {
+      const go = el('button', { class: 'btn primary', disabled: !missing.length || !state.list },
+        `🛒 Nakoupit (${missing.length})`);
+      go.addEventListener('click', () => act('shopping', { on: true }));
+      out.push(go);
+      if (!state.list) out.push(el('p', { class: 'muted small' }, 'Nejdřív vyber hlavní nákupní seznam.'));
+    }
+    if (state.error) out.push(el('p', { class: 'error small' }, `Synchronizace se seznamem: ${state.error}`));
+    out.push(listPicker());
+    return el('div', { class: 'shop-actions' }, ...out);
   };
 
   const paintShop = () => {
     const rows = state.shopping;
     if (!rows.length) {
       shopBox.replaceChildren(el('p', { class: 'muted' },
-        'Vyber nahoře, co budeš vařit a kolik porcí — suroviny se tu sečtou.'));
+        'Vyber nahoře, co budeš vařit a kolik porcí — suroviny se tu sečtou.'),
+      state.ha ? shopActions([]) : null);
       return;
     }
     const missing = rows.filter((r) => !r.have);
-    const pending = missing.filter((r) => r.to_send);
     shopBox.replaceChildren(
-      el('p', { class: 'muted small' }, `Chybí ${missing.length} z ${rows.length}`
-        + (missing.length > pending.length
-          ? `, ${missing.length - pending.length} už je v nákupním seznamu` : '')
-        + '. Zaškrtni, co máš doma.'),
+      el('p', { class: 'muted small' }, `Chybí ${missing.length} z ${rows.length}. `
+        + 'Zaškrtni, co máš doma nebo už je koupené.'),
       el('ul', { class: 'shop' }, ...rows.map((r) => {
-        const cb = el('input', { type: 'checkbox' });
+        const cb = el('input', { type: 'checkbox', disabled: !!state.plan.archived });
         cb.checked = r.have;
-        cb.addEventListener('change', async () => {
-          r.have = cb.checked;
-          await api('api/plan/have', { key: r.key, have: r.have });
-          paintShop();
-        });
+        cb.addEventListener('change', () => act('have', { key: r.key, have: cb.checked }));
         return el('li', { class: r.have ? 'have' : '' },
           el('label', {}, cb,
             el('span', { class: 'qty' }, qtyText(r)),
             el('span', {}, r.ingredient,
               el('span', { class: 'muted small' }, ' · ' + r.recipes.join(', ')),
-              !r.have && !r.to_send ? el('span', { class: 'chip sent' }, '✓ v seznamu') : null)));
+              r.in_list ? el('span', { class: 'chip sent' }, '🛒 v seznamu') : null)));
       })),
-      sendBox(pending, missing.length));
+      shopActions(missing));
   };
 
+  // Když plán nakupuje, odškrtnuté v HA (třeba v obchodě z mobilu) se tu
+  // ukáže samo -- jednou za 15 s, jen dokud je plán otevřený
+  const timer = setInterval(async () => {
+    if (!document.body.contains(root)) { clearInterval(timer); return; }
+    if (!state.plan.shopping || document.hidden) return;
+    try { state = await api(`api/plans/${pid}`); paintShop(); } catch (e) { /* příště */ }
+  }, 15000);
+
   filter.addEventListener('input', paintRecipes);
-  paintRecipes(); paintShop();
-  return el('div', {},
-    el('div', { class: 'row' }, el('h1', {}, 'Plán vaření'), el('div', { class: 'spacer' }),
-      confirmButton('Vyčistit plán', 'Opravdu vyčistit?', async () => {
-        state = await api('api/plan/clear', {});
-        paintRecipes(); paintShop(); toast('Plán vyčištěn.');
-      })),
+  paintHead(); paintRecipes(); paintShop();
+  root.append(
+    el('div', { class: 'card' }, headBox),
     el('div', { class: 'card' }, el('h2', { style: 'margin-top:0' }, 'Co budu vařit'),
       filter, recipeBox),
     el('div', { class: 'card' }, el('h2', { style: 'margin-top:0' }, 'Nákup'), shopBox));
+  return root;
 }
 
 /* ============================================================ SUROVINY */

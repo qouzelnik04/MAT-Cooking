@@ -148,3 +148,15 @@ td.num { text-align: right; }
 .photo-edit img { width: 120px; height: 80px; object-fit: cover; border-radius: 8px; }
 .plan-link { text-decoration: none; border-bottom: 1px dashed var(--muted); }
 
+
+/* Plány: přepínač (záložky s názvem a autorem), archiv */
+.plan-tabs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0 12px; }
+.plan-tabs a { display: inline-flex; flex-direction: column; padding: 6px 14px; border-radius: 12px;
+               background: var(--chip); color: var(--text); text-decoration: none; line-height: 1.25; }
+.plan-tabs a.on { background: var(--accent); color: var(--accent-text); }
+.plan-tabs a small { font-size: 11px; opacity: .75; }
+.new-plan { margin-bottom: 12px; }
+.new-plan input { flex: 1; min-width: 180px; }
+.plan-title { margin: 0; }
+.shop-actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; margin-top: 12px; }
+.archive summary { cursor: pointer; font-weight: 600; }

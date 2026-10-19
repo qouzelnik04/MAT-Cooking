@@ -17,13 +17,23 @@ domácnost. Chybějící suroviny půjdou rovnou do nákupních seznamů v HA.
 GitHub nabídne HA aktualizaci sám (Obchod s doplňky → ⋮ → Zkontrolovat
 aktualizace).
 
-## Nákupní seznamy
+## Plány a nákupní seznam
 
-Appka posílá chybějící suroviny do **seznamů úkolů v HA** (integrace Local
-To-do, jeden záznam = jeden obchod: Albert, Billa, Kaufland…). Add-on k tomu
-má `homeassistant_api: true` a token mu HA dá sám. Co už v seznamu
-nevyřízené je, se nepřidá podruhé. U položky je v popisu, pro které recepty
-je.
+Plánů vaření může být víc najednou (ty, spolubydlící, meal prep…), každý má
+vlastní recepty, porce a „koupeno / mám doma“. Vidí je celá domácnost; kdo
+plán vytvořil, appka ví z přihlášení HA (hlavička Ingressu). Uvařený plán jde
+do archivu, odkud jde zkopírovat.
+
+Jeden **hlavní nákupní seznam** v HA (seznam úkolů, např. „Nákupní seznam“;
+vybírá se v plánu). Plán po **Nakoupit** do něj posílá suroviny, sečtené se
+surovinami ostatních nakupujících plánů: „mrkev 800 g“, v popisu
+„Týden30: 400 g · Spolubydlící: 400 g“. Ručně přidané položky (jar…) appka
+nechává být, vede si jen svoje (`shop_items`, uid položky v HA).
+Odškrtávání jde oběma směry (`app/shopping.py`): koupeno v plánu = položka se
+zmenší, a když je koupeno všude, odškrtne se; odškrtnutá nebo smazaná v HA =
+koupeno ve všech plánech. Změny v HA appka hlídá přes websocket a pro jistotu
+každých 5 minut. Add-on k tomu má `homeassistant_api: true` a token mu HA dá
+sám.
 
 ## Recept na displeji
 
@@ -67,6 +77,7 @@ nic se neinstaluje.
 | 2 | Plán vaření: výběr receptů a porcí, sečtení surovin, „mám doma“, odeslání do nákupního seznamu HA | hotovo |
 | 2b | Odkaz z plánu na recept s naplánovanými porcemi, doba přípravy, fotky, export/import receptů | hotovo |
 | 2c | Recept na displej (Google Nest Hub přes Cast), mřížka receptů, porce a písmo přímo na displeji, dashboard spravuje appka | hotovo |
+| 2d | Víc pojmenovaných plánů, archiv, hlavní nákupní seznam se součty a odškrtáváním oběma směry | hotovo |
 | 3 | Lednice a mrazák, upozornění | |
 
 ## Kde co je
@@ -80,7 +91,8 @@ mat_cooking/
     main.py                HTTP server (Ingress v HA, 127.0.0.1 lokálně)
     db.py                  SQLite: recepty, suroviny, migrace schématu
     units.py               jednotky, převody g/kg a ml/l, parsování množství
-    plan.py                plán -> sečtený nákupní seznam (kusy nahoru)
+    plan.py                plán -> sečtený nákup (kusy nahoru)
+    shopping.py            plány <-> hlavní nákupní seznam v HA (součty, odškrtávání)
     ha.py                  REST API HA (seznamy úkolů, stavy entit, služby)
     display.py             recept na displej (dashboard, pomocníci, ovládání z displeje)
     ws.py                  websocket klient pro HA (jen standardní knihovna)

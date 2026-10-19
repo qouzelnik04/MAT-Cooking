@@ -192,14 +192,15 @@ CATEGORY_ICONS = {"snidane": "mdi:coffee-outline", "hlavni": "mdi:food-drumstick
 def dashboard_config(items: list[dict]) -> dict:
     """Pohled s receptem a pohledy s mřížkou receptů (vše / kategorie / písmeno).
 
-    items: [{label, title, image, category, planned}] v pořadí naplánované
-    první. Bez podmíněných karet -- promítání na Nest Hub je neukáže
+    items: [{label, title, image, category, plan}] -- nejdřív recepty aktivních
+    plánů (plan = název plánu), pak všechny recepty (plan = None). Bez podmíněných karet -- promítání na Nest Hub je neukáže
     (zůstane bílo). Filtry jsou proto samostatné pohledy a tlačítka mezi nimi
     jen navigují; zpátky na recept přepne appka, když se vybere recept.
     """
     attr = "{{ state_attr('" + ENTITY + "', '%s') or '' }}"
-    cats = [k for k in CATEGORIES if any(it["category"] == k for it in items)]
-    letters = sorted({letter(it["label"]) for it in items}, key=_ORDER.index)
+    plain = [it for it in items if not it["plan"]]
+    cats = [k for k in CATEGORIES if any(it["category"] == k for it in plain)]
+    letters = sorted({letter(it["label"]) for it in plain}, key=_ORDER.index)
 
     def filters(active: str) -> list[dict]:
         mark = lambda name, key: ("● " if key == active else "") + name  # noqa: E731
@@ -226,15 +227,15 @@ def dashboard_config(items: list[dict]) -> dict:
         return {"title": title, "path": path, "type": "panel",
                 "cards": [{"type": "vertical-stack", "cards": cards}]}
 
-    planned = [tile(it) for it in items if it["planned"]]
-    rest = [tile(it) for it in items if not it["planned"]]
     everything = filters("vse")
-    if planned:
-        everything += [_md("## Naplánováno", True), grid(planned)]
-        if rest:
-            everything.append(_md("## Další recepty", True))
-    if rest:
-        everything.append(grid(rest))
+    plans = list(dict.fromkeys(it["plan"] for it in items if it["plan"]))
+    for name in plans:
+        everything += [_md(f"## {name}", True),
+                       grid([tile(it) for it in items if it["plan"] == name])]
+    if plans and plain:
+        everything.append(_md("## Všechny recepty", True))
+    if plain:
+        everything.append(grid([tile(it) for it in plain]))
     if not items:
         everything.append(_md("Zatím tu nejsou žádné recepty -- přidej je v appce MAT-Cooking."))
 
@@ -263,18 +264,19 @@ def dashboard_config(items: list[dict]) -> dict:
     views = [{"title": "Recept", "path": VIEW_PATH, "type": "panel", "cards": [recipe]},
              view(PICKER_VIEW, "Recepty", everything)]
     views += [view(f"{PICKER_VIEW}-{k}", CATEGORIES[k], filters(k) + [grid(
-        [tile(it) for it in items if it["category"] == k])]) for k in cats]
+        [tile(it) for it in plain if it["category"] == k])]) for k in cats]
     if len(letters) > 1:
         views += [view(_letter_view(ch), ch, filters("p:" + ch) + [grid(
-            [tile(it) for it in sorted(items, key=lambda x: x["label"].lower())
-             if letter(it["label"]) == ch])]) for ch in letters]
+            [tile(it) for it in plain if letter(it["label"]) == ch])]) for ch in letters]
     return {"title": "MAT-Cooking displej", "views": views}
 
 
 # ----------------------------------------------------------------------
 class Display:
-    def __init__(self, data):
+    def __init__(self, data, shopping=None):
         self.data = data
+        self.shopping = shopping    # hlavní nákupní seznam: jeho změny hlídá i tenhle websocket
+        self._reconnect = False
         self.lock = threading.RLock()
         # Změny pomocníků, které udělala appka sama -- na ty se nereaguje
         self.expect_select: str | None = None
@@ -314,6 +316,10 @@ class Display:
     def status(self) -> dict:
         return {"controls": self.controls, "error": self.error}
 
+    def reconnect(self) -> None:
+        """Znovu se připojit (jiný hlavní nákupní seznam = jiné entity ke sledování)."""
+        self._reconnect = True
+
     def request_sync(self) -> None:
         """Recepty nebo plán se změnily -- obnoví mřížku a recept na displeji."""
         self._sync.set()
@@ -348,25 +354,41 @@ class Display:
             "entity_id": entity_id, "dashboard_path": DASHBOARD_PATH, "view_path": VIEW_PATH})
 
     # ------------------------------------------------------------------
-    def _options(self) -> list[tuple[str, int]]:
-        """[(popisek, id receptu)] -- naplánované první, popisky jedinečné."""
-        planned = {r["id"] for r in self.data.plan_rows()[0]}
-        recipes = sorted(self.data.list_recipes(),
-                         key=lambda r: (r["id"] not in planned, r["name"].lower()))
+    def _options(self) -> list[dict]:
+        """Volby výběru receptu: [{label, rid, portions, plan}].
+
+        Nejdřív recepty aktivních plánů (s porcemi z plánu; stejný recept ve
+        dvou plánech = dvě dlaždice), pak všechny recepty abecedně. Popisky
+        jsou jedinečné -- jsou to volby input_selectu.
+        """
         out, seen = [], {PICKER.lower()}
-        for r in recipes:
-            base = r["name"].strip()[:200]
+
+        def add(base: str, rid: int, portions: int | None, plan: str | None) -> None:
             label, n = base, 2
             while label.lower() in seen:
                 label, n = f"{base} ({n})", n + 1
             seen.add(label.lower())
-            out.append((label, r["id"]))
+            out.append({"label": label, "rid": rid, "portions": portions, "plan": plan})
+
+        recipes = {r["id"]: r for r in self.data.list_recipes()}
+        planned = [pr for pr in self.data.active_plan_recipes() if pr["id"] in recipes]
+        order = list(dict.fromkeys(pr["plan_id"] for pr in planned))    # nejnovější plán první
+        for pr in sorted(planned, key=lambda x: (order.index(x["plan_id"]),
+                                                 recipes[x["id"]]["name"].lower())):
+            add(f'{recipes[pr["id"]]["name"].strip()[:150]} · {pr["plan"][:40]}', pr["id"],
+                min(MAX_PORTIONS, max(1, int(pr["portions"]))), pr["plan"])
+        for r in sorted(recipes.values(), key=lambda r: r["name"].lower()):
+            add(r["name"].strip()[:200], r["id"], None, None)
         return out
 
+    def _lookup(self, label: str | None) -> dict | None:
+        return next((o for o in self._options() if o["label"] == label), None)
+
     def _default_portions(self, rid: int) -> int:
-        for r in self.data.plan_rows()[0]:
-            if r["id"] == rid:
-                return min(MAX_PORTIONS, max(1, int(r["portions"])))
+        """Porce z prvního aktivního plánu, kde recept je, jinak výchozí z receptu."""
+        for pr in self.data.active_plan_recipes():
+            if pr["id"] == rid:
+                return min(MAX_PORTIONS, max(1, int(pr["portions"])))
         r = self.data.get_recipe(rid)
         return min(MAX_PORTIONS, max(1, int(r["servings"] if r else 1)))
 
@@ -423,13 +445,14 @@ class Display:
                 pass        # už smazaný -- nevadí
 
     def _dashboard_config(self) -> dict:
-        planned = {r["id"]: r["portions"] for r in self.data.plan_rows()[0]}
         recipes = {r["id"]: r for r in self.data.list_recipes()}
-        items = [{"label": label, "image": self._tile_image(recipes[rid]),
-                  "category": recipes[rid]["category"], "planned": rid in planned,
-                  "title": (f"{label} · {_portions_text(int(planned[rid]))}"
-                            if rid in planned else label)}
-                 for label, rid in self._options()]
+        items = []
+        for o in self._options():
+            r = recipes[o["rid"]]
+            items.append({"label": o["label"], "image": self._tile_image(r),
+                          "category": r["category"], "plan": o["plan"],
+                          "title": (f'{r["name"]} · {_portions_text(o["portions"])}'
+                                    if o["plan"] else o["label"])})
         # Fotky smazaných receptů (nebo smazané fotky) z HA pryč
         keep = {str(rid) for rid, r in recipes.items() if r["photo"]}
         for key in [k for k in self.images if k not in keep]:
@@ -446,11 +469,12 @@ class Display:
         přejmenování nevadí).
         """
         options = self._options()
-        labels = [PICKER] + [label for label, _ in options]
+        labels = [PICKER] + [o["label"] for o in options]
         st = ha.get_state(SELECT)
         cur = (st or {}).get("state")
         if cur and cur != PICKER and self.current is None:
-            self.current = dict(options).get(cur)     # přechod z 0.7: recept byl v SELECT
+            found = self._lookup(cur)                  # přechod z 0.7: recept byl v SELECT
+            self.current = found["rid"] if found else None
             self._save()
         if not st or list((st.get("attributes") or {}).get("options") or []) != labels:
             ha.call_service("input_select", "set_options", {"entity_id": SELECT, "options": labels})
@@ -498,11 +522,11 @@ class Display:
                 self.expect_select = None
                 if state == PICKER:
                     return
-                rid = dict(self._options()).get(state)
-                if rid:
-                    self.current = rid
+                found = self._lookup(state)
+                if found:
+                    rid = self.current = found["rid"]
                     self._save()
-                    portions = self._default_portions(rid)
+                    portions = found["portions"] or self._default_portions(rid)
                     if self._number(ha.get_state(NUMBER)) != portions:
                         self.expect_number = portions
                         ha.call_service("input_number", "set_value",
@@ -555,7 +579,10 @@ class Display:
         while True:
             started = time.monotonic()
             try:
-                self._session()
+                if self._session():
+                    with self.lock:
+                        self.controls, self._cmd, self._dashboard = False, None, None
+                    continue                # vyžádané přepojení -- hned znovu
             except Exception as exc:        # noqa: BLE001
                 msg = f"{type(exc).__name__}: {exc}"
                 if msg != self.error:
@@ -574,7 +601,8 @@ class Display:
             delay = 5 if time.monotonic() - started > 120 else min(delay * 2, 120)
             time.sleep(delay)
 
-    def _session(self) -> None:
+    def _session(self) -> bool:
+        """Jedno spojení s HA; True = skončilo kvůli vyžádanému přepojení."""
         ws = WebSocket(ha.ws_url())
         next_id = iter(range(1, 10**9))
         events: list[dict] = []     # události, které přišly během čekání na odpověď
@@ -616,8 +644,10 @@ class Display:
                      "show_in_sidebar": False, "require_admin": False, "mode": "storage"})
 
             sub = next(next_id)
+            shop = self.shopping.entity() if self.shopping else ""
             ws.send({"id": sub, "type": "subscribe_trigger",
-                     "trigger": {"platform": "state", "entity_id": [SELECT, NUMBER, SIZE]}})
+                     "trigger": {"platform": "state",
+                                 "entity_id": [SELECT, NUMBER, SIZE] + ([shop] if shop else [])}})
             while True:
                 msg = ws.recv()
                 if msg.get("id") == sub and msg.get("type") == "result":
@@ -637,6 +667,9 @@ class Display:
 
             last_ping = time.monotonic()
             while True:
+                if self._reconnect:
+                    self._reconnect = False
+                    return True
                 if self._sync.is_set():
                     time.sleep(0.5)             # víc změn najednou = jedno obnovení
                     self._sync.clear()
@@ -657,6 +690,9 @@ class Display:
                 to, fr = trig.get("to_state"), trig.get("from_state")
                 # Změna jen atributů (např. nový seznam receptů) není přepnutí
                 if not to or (fr and fr.get("state") == to.get("state")):
+                    continue
+                if str(trig.get("entity_id")).startswith("todo."):
+                    self.shopping.request()     # v hlavním seznamu se něco odškrtlo
                     continue
                 try:
                     self._on_change(trig.get("entity_id"), to.get("state"))
