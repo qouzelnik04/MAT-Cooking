@@ -162,7 +162,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(_plan())
             if path == "/api/display":
                 DISPLAY.show(str(body.get("entity_id") or ""), int(body.get("recipe_id") or 0),
-                             body.get("portions"), str(body.get("size") or ""))
+                             body.get("portions"), str(body.get("size") or ""),
+                             str(body.get("view") or ""))
                 return self._json({"ok": True})
             if path == "/api/plan/send":
                 with SEND_LOCK:

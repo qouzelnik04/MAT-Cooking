@@ -43,6 +43,9 @@ SIZE = "input_select.mat_cooking_pismo"
 DASHBOARD_PATH = "mat-cooking-displej"
 VIEW_PATH = "recept"
 PICKER = "📖 Výběr receptu"
+# Dočasné zkušební pohledy: který se na displeji ukáže, prozradí kartu,
+# kterou promítání na Nest Hubu neumí. Po zjištění se odstraní.
+TEST_VIEWS = ("test-1", "test-2", "test-3", "test-4", "test-5")
 MAX_PORTIONS = 50
 
 SIZES = {"normalni": "A", "velke": "A+", "obri": "A++"}   # klíč z appky -> volba
@@ -186,6 +189,17 @@ def dashboard_config(tiles_planned: list[dict], tiles_rest: list[dict]) -> dict:
             {"type": "vertical-stack", "cards": [photo, _md(attr % "html_postup")]},
         ]},
     ]}
+    columns = recipe["cards"][1]
+    tests = [
+        ("test-1", _md("# Test 1\nObyčejný text.")),
+        ("test-2", {"type": "vertical-stack", "cards": [_md("# Test 2"), *recipe["cards"]]}),
+        ("test-3", {"type": "vertical-stack", "cards": [_md("# Test 3"), columns]}),
+        ("test-4", {"type": "vertical-stack", "cards": [_md("# Test 4"), *picker]}),
+        ("test-5", {"type": "vertical-stack", "cards": [_md("# Test 5"), {
+            "type": "conditional",
+            "conditions": [{"condition": "state", "entity": SELECT, "state_not": "xxx"}],
+            "card": _md("Podmíněná karta funguje.")}]}),
+    ]
     return {"title": "MAT-Cooking displej", "views": [{
         "title": "Recept", "path": VIEW_PATH, "type": "panel", "cards": [{
             "type": "vertical-stack", "cards": [
@@ -196,7 +210,7 @@ def dashboard_config(tiles_planned: list[dict], tiles_rest: list[dict]) -> dict:
                  "conditions": [{"condition": "state", "entity": SELECT, "state_not": PICKER}],
                  "card": recipe},
             ]}],
-    }]}
+    }] + [{"title": path, "path": path, "type": "panel", "cards": [card]} for path, card in tests]}
 
 
 # ----------------------------------------------------------------------
@@ -230,7 +244,8 @@ class Display:
     # ------------------------------------------------------------------
     # Z appky: recept na displej
     # ------------------------------------------------------------------
-    def show(self, entity_id: str, rid: int, portions: int | None, size: str) -> None:
+    def show(self, entity_id: str, rid: int, portions: int | None, size: str,
+             view: str = "") -> None:
         if not ha.available():
             raise InputError("Appka neběží v Home Assistantu -- na displej nejde poslat.")
         if not entity_id.startswith("media_player."):
@@ -249,7 +264,8 @@ class Display:
                     print(f"  Displej: pomocníky nejde nastavit: {exc}", flush=True)
             self._render(rid, portions)
         ha.call_service("cast", "show_lovelace_view", {
-            "entity_id": entity_id, "dashboard_path": DASHBOARD_PATH, "view_path": VIEW_PATH})
+            "entity_id": entity_id, "dashboard_path": DASHBOARD_PATH,
+            "view_path": view if view in TEST_VIEWS else VIEW_PATH})
 
     # ------------------------------------------------------------------
     def _options(self) -> list[tuple[str, int]]:
