@@ -105,8 +105,10 @@ label.field > span { display: block; font-size: 13px; color: var(--muted); margi
 .tools { display: flex; gap: 4px; }
 /* Úchyt pro přetažení suroviny: prst ho nesmí brát jako posun stránky */
 .handle { cursor: grab; touch-action: none; font-size: 16px; line-height: 1; }
-.item-row.dragging { opacity: .75; background: var(--chip); border-radius: 8px;
-                     outline: 2px dashed var(--accent); }
+/* Tažený řádek pluje nad ostatními (posun dělá app.js přes transform) */
+.item-row.dragging { position: relative; z-index: 5; background: var(--card);
+                     border-radius: 8px; outline: 2px solid var(--accent);
+                     box-shadow: 0 10px 28px rgba(0, 0, 0, .35); padding: 8px; margin: 0 -8px; }
 .item-row.dragging .handle { cursor: grabbing; }
 
 table { width: 100%; border-collapse: collapse; }

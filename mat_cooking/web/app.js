@@ -292,24 +292,35 @@ async function editView(id) {
   const rows = el('div', {});
 
   /* Přetažení řádku suroviny za úchyt ⠿ -- myší i prstem (pointer events).
-     Řádek se během tažení rovnou přesouvá na místo, nad kterým je ukazatel. */
+     Tažený řádek pluje pod ukazatelem a ostatní mu uhýbají. Přesouvají se
+     jen ty ostatní: kdyby se tažený řádek vyjmul ze stránky, prohlížeč by
+     pustil zachycení ukazatele a tah by po prvním kroku skončil. */
   const drag = (handle, row) => {
     handle.addEventListener('pointerdown', (ev) => {
       if (ev.button > 0) return;
       ev.preventDefault();
       try { handle.setPointerCapture(ev.pointerId); } catch (e) { /* bez zachycení to jde taky */ }
       row.classList.add('dragging');
+      const grab = ev.clientY - row.getBoundingClientRect().top;
+      let shift = 0;      // o kolik je řádek posunutý z místa, kde v seznamu je
+      const mid = (x) => { const b = x.getBoundingClientRect(); return b.top + b.height / 2; };
       const move = (e) => {
-        const next = [...rows.children].find((x) => x !== row
-          && e.clientY < x.getBoundingClientRect().top + x.getBoundingClientRect().height / 2);
-        if (next) {
-          if (next !== row.nextElementSibling) rows.insertBefore(row, next);
-        } else if (rows.lastElementChild !== row) rows.append(row);
+        let other;
+        while ((other = row.previousElementSibling) && e.clientY < mid(other)) {
+          rows.insertBefore(other, row.nextElementSibling);
+        }
+        while ((other = row.nextElementSibling) && e.clientY > mid(other)) {
+          rows.insertBefore(other, row);
+        }
+        const top = row.getBoundingClientRect().top - shift;
+        shift = e.clientY - grab - top;
+        row.style.transform = `translateY(${shift}px)`;
         if (e.clientY < 60) window.scrollBy(0, -12);
         else if (e.clientY > window.innerHeight - 60) window.scrollBy(0, 12);
       };
       const end = () => {
         row.classList.remove('dragging');
+        row.style.transform = '';
         handle.removeEventListener('pointermove', move);
         handle.removeEventListener('pointerup', end);
         handle.removeEventListener('pointercancel', end);
