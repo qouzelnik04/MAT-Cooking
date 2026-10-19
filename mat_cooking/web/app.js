@@ -199,6 +199,7 @@ async function recipeView(id, planned) {
       el('ol', { class: 'steps' }, ...steps.map((s) => el('li', {}, s)))) : null,
     r.notes ? el('div', { class: 'card' }, el('h2', { style: 'margin-top:0' }, 'Poznámky'),
       el('p', { style: 'white-space:pre-wrap;margin:0' }, r.notes)) : null,
+    displayBox(r, () => portions),
     el('div', { class: 'row', style: 'margin-top:16px' },
       el('a', { class: 'btn', href: `#upravit/${r.id}` }, 'Upravit'),
       el('a', { class: 'btn', href: `api/export?id=${r.id}`, download: '',
@@ -209,6 +210,48 @@ async function recipeView(id, planned) {
         toast('Recept smazán.');
         location.hash = '#recepty';
       })));
+}
+
+/* Recept na displej (Google Nest Hub): appka ho zapíše do entity v HA a HA
+   na displej promítne dashboard, který ji ukazuje. Mimo HA se nezobrazí. */
+function displayBox(r, getPortions) {
+  const box = el('div', { class: 'card display-box', hidden: true });
+  api('api/displays').then((res) => {
+    if (!res.available) return;
+    let last = '';
+    try { last = localStorage.getItem('mat-cooking-display') || ''; } catch (e) { /* nevadí */ }
+    const select = el('select', {}, ...(res.displays.length ? res.displays.map((d) =>
+      el('option', { value: d.entity_id, selected: d.entity_id === last }, d.name))
+      : [el('option', { value: '' }, 'V HA není žádný displej')]));
+    const send = el('button', { class: 'btn primary', disabled: !res.displays.length },
+      '📺 Na displej');
+    send.addEventListener('click', async () => {
+      send.disabled = true;
+      try {
+        try { localStorage.setItem('mat-cooking-display', select.value); } catch (e) { /* nevadí */ }
+        await api('api/display', { recipe_id: r.id, portions: getPortions(),
+          entity_id: select.value });
+        toast(`Posláno na displej, porcí: ${getPortions()}. Načtení trvá i 10–20 s.`);
+      } catch (e) { toast(e.message); } finally { send.disabled = false; }
+    });
+    const yaml = el('pre', { class: 'yaml' }, res.dashboard);
+    box.replaceChildren(
+      el('div', { class: 'row' }, select, send),
+      el('details', { class: 'small', style: 'margin-top:8px' },
+        el('summary', { class: 'muted' }, 'Jak displej nastavit (jednou)'),
+        el('ol', { class: 'small' },
+          el('li', {}, 'V HA: Nastavení → Dashboardy → Přidat dashboard → „Nový dashboard od začátku“, '
+            + 'název MAT-Cooking displej, URL ', el('code', {}, 'mat-cooking-displej'), '.'),
+          el('li', {}, 'Otevři ho → tužka (Upravit) → ⋮ → Editor kódu → vlož text níže → Uložit.'),
+          el('li', {}, 'HA musí mít nastavenou internetovou adresu (Nastavení → Systém → Síť), '
+            + 'u tebe https://ha.mat-home.cz — displej si dashboard načítá přes ni.')),
+        yaml,
+        el('button', { class: 'btn small', onclick: async () => {
+          await navigator.clipboard.writeText(res.dashboard); toast('Zkopírováno.');
+        } }, 'Zkopírovat')));
+    box.hidden = false;
+  }).catch(() => { /* bez HA se box nezobrazí */ });
+  return box;
 }
 
 async function editView(id) {

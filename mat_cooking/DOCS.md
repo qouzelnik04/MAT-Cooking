@@ -4,7 +4,7 @@ Recepty a plán vaření pro celou domácnost.
 
 ## Použití
 
-Otevři **Vaření** v postranním panelu HA.
+Otevři **MAT-Cooking** v postranním panelu HA.
 
 - **Plán** — u receptů nastavíš, kolik porcí uvaříš. Suroviny se sečtou,
   zaškrtneš, co máš doma, a zbytek pošleš do nákupního seznamu (seznamy
@@ -17,6 +17,10 @@ Otevři **Vaření** v postranním panelu HA.
 - **Export / Import** — dole v záložce Recepty. Soubor se všemi recepty
   i fotkami; na jiném HA ho nahraješ přes Import (recepty se stejným názvem
   se přeskočí).
+- **Na displej** — v detailu receptu pošleš recept (s nastavenými porcemi)
+  na displej s Google Cast, např. Google Nest Hub. Jednou je potřeba vytvořit
+  dashboard `mat-cooking-displej` — návod i text ke zkopírování je přímo
+  v appce pod tlačítkem. HA musí mít nastavenou internetovou adresu.
 - **Suroviny** — katalog všech surovin. Když stejnou věc máš pod dvěma názvy,
   přejmenuj jednu na druhou a sloučí se.
 

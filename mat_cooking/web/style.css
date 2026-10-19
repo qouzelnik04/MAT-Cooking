@@ -140,3 +140,7 @@ td.num { text-align: right; }
 .photo-edit { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
 .photo-edit img { width: 120px; height: 80px; object-fit: cover; border-radius: 8px; }
 .plan-link { text-decoration: none; border-bottom: 1px dashed var(--muted); }
+
+/* Recept na displej */
+.yaml { background: var(--chip); padding: 10px; border-radius: 8px; overflow-x: auto;
+        font-size: 12px; max-height: 260px; }

@@ -87,3 +87,35 @@ def update_item(entity_id: str, item: dict, text: str, description: str) -> None
         if not description:
             raise
         _call("POST", "/services/todo/update_item", body)
+
+
+# ----------------------------------------------------------------------
+# Recept na displeji (Google Nest Hub přes Google Cast)
+# ----------------------------------------------------------------------
+DISPLAY_ENTITY = "sensor.mat_cooking_recept"
+DASHBOARD_PATH = "mat-cooking-displej"
+VIEW_PATH = "recept"
+
+
+def media_players() -> list[dict]:
+    """Přehrávače v HA, na které jde promítat: [{entity_id, name}].
+
+    Bere i skryté entity -- skrytí je jen o zobrazení v UI HA.
+    """
+    states = _call("GET", "/states") or []
+    out = [{"entity_id": s["entity_id"],
+            "name": (s.get("attributes") or {}).get("friendly_name") or s["entity_id"]}
+           for s in states if s.get("entity_id", "").startswith("media_player.")]
+    return sorted(out, key=lambda x: x["name"].lower())
+
+
+def show_recipe(entity_id: str, name: str, attributes: dict) -> None:
+    """Zapíše recept do entity a promítne na displej dashboard, který ji ukazuje."""
+    if not entity_id.startswith("media_player."):
+        raise HAError("Neplatný displej.")
+    # Stav entity smí mít nejvýš 255 znaků -- název receptu se vejde vždy
+    _call("POST", f"/states/{DISPLAY_ENTITY}",
+          {"state": name[:255], "attributes": {"friendly_name": "MAT-Cooking recept",
+                                               "icon": "mdi:chef-hat", **attributes}})
+    _call("POST", "/services/cast/show_lovelace_view",
+          {"entity_id": entity_id, "dashboard_path": DASHBOARD_PATH, "view_path": VIEW_PATH})

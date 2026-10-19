@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import APP_NAME, APP_VERSION, ha
 from .db import CATEGORIES, DB, InputError
 from .plan import item_text, parse_item, shopping_list
-from .units import UNITS
+from .units import UNITS, fmt, parse_amount
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_DIR = os.path.join(ROOT, "web")
@@ -107,6 +107,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not ha.available():
                     return self._json({"available": False, "lists": []})
                 return self._json({"available": True, "lists": ha.todo_lists()})
+            if path == "/api/displays":
+                if not ha.available():
+                    return self._json({"available": False, "displays": []})
+                return self._json({"available": True, "displays": ha.media_players(),
+                                   "dashboard": DISPLAY_DASHBOARD})
             return self._err(404, "Taková adresa tu není.")
         except ha.HAError as exc:
             return self._err(502, str(exc))
@@ -153,6 +158,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/plan/clear":
                 DATA.clear_plan()
                 return self._json(_plan())
+            if path == "/api/display":
+                return self._json(_display(body))
             if path == "/api/plan/send":
                 with SEND_LOCK:
                     return self._json(_send(str(body.get("entity_id") or "")))
@@ -291,6 +298,68 @@ def _import(body: dict) -> dict:
         if rec.get("photo") and rec.get("photo_small"):
             DATA.set_photo(rid, _b64(rec["photo"]), _b64(rec["photo_small"]))
     return {"added": [rec["name"] for _, rec in added], "skipped": skipped}
+
+
+# Dashboard v HA, který appka promítá na displej. Uživatel ho jednou vytvoří
+# (Nastavení -> Dashboardy -> Přidat -> URL "mat-cooking-displej" -> Upravit
+# -> Editor kódu) a vloží tohle. Appka ho ukazuje ke zkopírování.
+DISPLAY_DASHBOARD = """\
+title: MAT-Cooking displej
+views:
+  - title: Recept
+    path: recept
+    cards:
+      - type: markdown
+        content: |
+          # {{ states('sensor.mat_cooking_recept') }}
+          **{{ state_attr('sensor.mat_cooking_recept', 'info') }}**
+
+          {% for s in state_attr('sensor.mat_cooking_recept', 'suroviny') or [] -%}
+          - {{ s }}
+          {% endfor %}
+      - type: markdown
+        content: |
+          ## Postup
+          {% for s in state_attr('sensor.mat_cooking_recept', 'postup') or [] -%}
+          {{ loop.index }}. {{ s }}
+          {% endfor %}
+      - type: button
+        entity: sensor.mat_cooking_recept
+        name: Test dotyku - klepni sem
+        icon: mdi:gesture-tap
+        tap_action:
+          action: more-info
+"""
+
+
+def _display(body: dict) -> dict:
+    """Recept s danými porcemi na displej (Nest Hub) přes dashboard v HA."""
+    if not ha.available():
+        raise InputError("Appka neběží v Home Assistantu -- na displej nejde poslat.")
+    entity_id = str(body.get("entity_id") or "")
+    if not entity_id.startswith("media_player."):
+        raise InputError("Vyber displej.")
+    r = DATA.get_recipe(int(body.get("recipe_id") or 0))
+    if not r:
+        raise InputError("Recept neexistuje.")
+    portions = max(1, int(body.get("portions") or r["servings"]))
+    factor = Decimal(portions) / Decimal(r["servings"] or 1)
+    items = []
+    for it in r["items"]:
+        amount = parse_amount(it["amount"])
+        qty = (f'{fmt(amount * factor).replace(".", ",")} {it["unit"]}'.strip()
+               if amount is not None else "")
+        items.append(" ".join(x for x in (qty, it["ingredient"],
+                                          f'({it["note"]})' if it["note"] else "") if x))
+    info = f"{portions} {'porce' if portions < 5 else 'porcí'}"
+    if r["minutes"]:
+        info += f' · {r["minutes"]} min'
+    ha.show_recipe(entity_id, r["name"], {
+        "porce": portions, "info": info, "suroviny": items,
+        "postup": [s.strip() for s in r["steps"].splitlines() if s.strip()],
+        "poznamky": r["notes"],
+    })
+    return {"ok": True}
 
 
 def _plan() -> dict:
