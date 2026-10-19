@@ -28,11 +28,12 @@ def available() -> bool:
     return bool(TOKEN)
 
 
-def _call(method: str, path: str, body=None):
-    data = json.dumps(body).encode("utf-8") if body is not None else None
+def _call(method: str, path: str, body=None, raw: bytes | None = None,
+          content_type: str = "application/json"):
+    data = json.dumps(body).encode("utf-8") if body is not None else raw
     req = urllib.request.Request(
         BASE + path, data=data, method=method,
-        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"})
+        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": content_type})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             raw = r.read()
@@ -120,6 +121,32 @@ def set_state(entity_id: str, state: str, attributes: dict) -> None:
 
 def call_service(domain: str, service: str, data: dict) -> None:
     _call("POST", f"/services/{domain}/{service}", data)
+
+
+def upload_image(data: bytes, filename: str) -> str:
+    """Nahraje JPEG do úložiště obrázků HA (to, kam se dávají fotky osob).
+
+    Vrací id; obrázek je pak na /api/image/serve/<id>/512x512 -- bez
+    přihlášení (jako fotky osob), takže ho načte i displej.
+    """
+    boundary = "matcooking" + os.urandom(12).hex()
+    body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+            f'filename="{filename}"\r\nContent-Type: image/jpeg\r\n\r\n').encode() \
+        + data + f"\r\n--{boundary}--\r\n".encode()
+    res = _call("POST", "/image/upload", raw=body,
+                content_type=f"multipart/form-data; boundary={boundary}")
+    if not isinstance(res, dict) or not res.get("id"):
+        raise HAError("HA obrázek nepřijal.")
+    return str(res["id"])
+
+
+def external_url() -> str:
+    """Adresa HA z internetu (Nastavení -> Síť); prázdná, když není nastavená."""
+    try:
+        cfg = _call("GET", "/config") or {}
+    except HAError:
+        return ""
+    return str(cfg.get("external_url") or cfg.get("internal_url") or "").rstrip("/")
 
 
 def ws_url() -> str:

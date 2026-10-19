@@ -39,7 +39,11 @@ Appka si v HA přes websocket API sama udržuje (`app/display.py`):
 - entity `sensor.mat_cooking_recept` (hotové HTML karet receptu) a
   `sensor.mat_cooking_recept_foto` (náhled fotky jako data: URL).
 
-Dashboard má dva pohledy, `recept` a `recepty` (mřížka). Podmíněné karty
+Dashboard má pohled `recept` a mřížky receptů: `recepty` (vše, naplánované
+první), `recepty-<kategorie>` a `recepty-pismeno-<písmeno>` (český rejstřík:
+Á pod A, Č, Ř, Š, Ž a Ch zvlášť). Fotky dlaždic appka jednou nahraje do
+úložiště obrázků HA (`/api/image/upload`, jako fotky osob) a dlaždice na ně
+jen odkazují -- jinak by je dashboard nesl v každém pohledu znovu. Podmíněné karty
 (conditional) promítání na Nest Hub neukáže -- zůstane bílá obrazovka --,
 proto se na mřížku jde navigací a zpátky na recept appka přepne sama
 (`cast.show_lovelace_view` na displej, kam se naposledy posílalo). Klepnutí

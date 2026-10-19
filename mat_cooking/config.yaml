@@ -1,7 +1,7 @@
 # HA nabídne aktualizaci, jen když se tu zvýší verze. Appka si verzi
 # čte odsud, takže je na jednom místě.
 name: MAT-Cooking
-version: "0.8.0"
+version: "0.9.0"
 slug: mat_cooking
 description: Recepty a plán vaření -- chybějící suroviny rovnou do nákupního seznamu HA
 url: https://github.com/qouzelnik04/MAT-Cooking

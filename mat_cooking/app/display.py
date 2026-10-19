@@ -34,7 +34,7 @@ import urllib.parse
 from decimal import Decimal
 
 from . import ha
-from .db import InputError
+from .db import CATEGORIES, InputError
 from .units import fmt, parse_amount
 from .ws import WebSocket
 
@@ -143,8 +143,9 @@ def _md(content: str, text_only: bool = False) -> dict:
     return out
 
 
-def _button(name: str, icon: str, tap: dict) -> dict:
-    return {"type": "button", "name": name, "icon": icon, "icon_height": "32px",
+def _button(name: str, icon: str, tap: dict, small: bool = False) -> dict:
+    return {"type": "button", "name": name, "icon": icon,
+            "icon_height": "22px" if small else "32px",
             "show_state": False, "tap_action": tap, "hold_action": {"action": "none"}}
 
 
@@ -158,27 +159,79 @@ def _navigate(view: str) -> dict:
     return {"action": "navigate", "navigation_path": f"/{DASHBOARD_PATH}/{view}"}
 
 
-def dashboard_config(tiles_planned: list[dict], tiles_rest: list[dict]) -> dict:
-    """Dva pohledy: recept a mřížka receptů.
+# Písmena pro rejstřík: Á je pod A (jako v českém rejstříku), Č, Ř, Š, Ž a Ch
+# jsou samostatná písmena v českém pořadí.
+_FOLD = str.maketrans("ÁÄÉĚÍÓÖÚŮÜÝĎŤŇ", "AAEEIOOUUUYDTN")
+_ORDER = ["A", "B", "C", "Č", "D", "E", "F", "G", "H", "Ch", "I", "J", "K", "L", "M", "N",
+          "O", "P", "Q", "R", "Ř", "S", "Š", "T", "U", "V", "W", "X", "Y", "Z", "Ž", "#"]
+_LETTER_PATH = {"Č": "c2", "Ř": "r2", "Š": "s2", "Ž": "z2", "Ch": "ch", "#": "cislo"}
 
-    Bez podmíněných karet -- promítání na Nest Hub je neukáže (zůstane bílo).
-    Na mřížku se jde tlačítkem (navigace), zpátky na recept přepne appka sama,
-    když se klepnutím na dlaždici vybere recept.
+
+def letter(name: str) -> str:
+    n = name.strip()
+    if n[:2].lower() == "ch":
+        return "Ch"
+    first = n[:1].upper().translate(_FOLD)
+    return first if first in _ORDER else "#"
+
+
+def _letter_view(ch: str) -> str:
+    return f"{PICKER_VIEW}-pismeno-{_LETTER_PATH.get(ch, ch.lower())}"
+
+
+CATEGORY_ICONS = {"snidane": "mdi:coffee-outline", "hlavni": "mdi:food-drumstick-outline",
+                  "polevka": "mdi:pot-steam-outline", "svacina": "mdi:food-apple-outline",
+                  "dezert": "mdi:cupcake", "jine": "mdi:silverware-fork-knife"}
+
+
+def dashboard_config(items: list[dict]) -> dict:
+    """Pohled s receptem a pohledy s mřížkou receptů (vše / kategorie / písmeno).
+
+    items: [{label, title, image, category, planned}] v pořadí naplánované
+    první. Bez podmíněných karet -- promítání na Nest Hub je neukáže
+    (zůstane bílo). Filtry jsou proto samostatné pohledy a tlačítka mezi nimi
+    jen navigují; zpátky na recept přepne appka, když se vybere recept.
     """
     attr = "{{ state_attr('" + ENTITY + "', '%s') or '' }}"
-    picker = [{"type": "horizontal-stack", "cards": [
-        _md("# Co budeme vařit?", True),
-        _button("Zpět na recept", "mdi:arrow-left", _navigate(VIEW_PATH)),
-    ]}]
-    if tiles_planned:
-        picker += [_md("## Naplánováno", True),
-                   {"type": "grid", "columns": 4, "square": False, "cards": tiles_planned}]
-        if tiles_rest:
-            picker.append(_md("## Další recepty", True))
-    if tiles_rest:
-        picker.append({"type": "grid", "columns": 4, "square": False, "cards": tiles_rest})
-    if not tiles_planned and not tiles_rest:
-        picker.append(_md("Zatím tu nejsou žádné recepty -- přidej je v appce MAT-Cooking."))
+    cats = [k for k in CATEGORIES if any(it["category"] == k for it in items)]
+    letters = sorted({letter(it["label"]) for it in items}, key=_ORDER.index)
+
+    def filters(active: str) -> list[dict]:
+        mark = lambda name, key: ("● " if key == active else "") + name  # noqa: E731
+        row = [_button("Recept", "mdi:arrow-left", _navigate(VIEW_PATH), small=True),
+               _button(mark("Vše", "vse"), "mdi:view-grid-outline", _navigate(PICKER_VIEW),
+                       small=True)]
+        row += [_button(mark(CATEGORIES[k], k), CATEGORY_ICONS[k],
+                        _navigate(f"{PICKER_VIEW}-{k}"), small=True) for k in cats]
+        out = [{"type": "horizontal-stack", "cards": row}]
+        if len(letters) > 1:
+            out.append({"type": "grid", "columns": min(len(letters), 14), "square": False,
+                        "cards": [{"type": "button", "name": mark(ch, "p:" + ch),
+                                   "show_icon": False, "tap_action": _navigate(_letter_view(ch)),
+                                   "hold_action": {"action": "none"}} for ch in letters]})
+        return out
+
+    def grid(tiles: list[dict]) -> dict:
+        return {"type": "grid", "columns": 4, "square": False, "cards": tiles}
+
+    def tile(it: dict) -> dict:
+        return _tile(it["label"], it["image"], it["title"])
+
+    def view(path: str, title: str, cards: list[dict]) -> dict:
+        return {"title": title, "path": path, "type": "panel",
+                "cards": [{"type": "vertical-stack", "cards": cards}]}
+
+    planned = [tile(it) for it in items if it["planned"]]
+    rest = [tile(it) for it in items if not it["planned"]]
+    everything = filters("vse")
+    if planned:
+        everything += [_md("## Naplánováno", True), grid(planned)]
+        if rest:
+            everything.append(_md("## Další recepty", True))
+    if rest:
+        everything.append(grid(rest))
+    if not items:
+        everything.append(_md("Zatím tu nejsou žádné recepty -- přidej je v appce MAT-Cooking."))
 
     toolbar = {"type": "horizontal-stack", "cards": [
         _button("Recepty", "mdi:view-grid-outline", _navigate(PICKER_VIEW)),
@@ -201,11 +254,15 @@ def dashboard_config(tiles_planned: list[dict], tiles_rest: list[dict]) -> dict:
             {"type": "vertical-stack", "cards": [photo, _md(attr % "html_postup")]},
         ]},
     ]}
-    return {"title": "MAT-Cooking displej", "views": [
-        {"title": "Recept", "path": VIEW_PATH, "type": "panel", "cards": [recipe]},
-        {"title": "Recepty", "path": PICKER_VIEW, "type": "panel",
-         "cards": [{"type": "vertical-stack", "cards": picker}]},
-    ]}
+    views = [{"title": "Recept", "path": VIEW_PATH, "type": "panel", "cards": [recipe]},
+             view(PICKER_VIEW, "Recepty", everything)]
+    views += [view(f"{PICKER_VIEW}-{k}", CATEGORIES[k], filters(k) + [grid(
+        [tile(it) for it in items if it["category"] == k])]) for k in cats]
+    if len(letters) > 1:
+        views += [view(_letter_view(ch), ch, filters("p:" + ch) + [grid(
+            [tile(it) for it in sorted(items, key=lambda x: x["label"].lower())
+             if letter(it["label"]) == ch])]) for ch in letters]
+    return {"title": "MAT-Cooking displej", "views": views}
 
 
 # ----------------------------------------------------------------------
@@ -232,11 +289,16 @@ class Display:
             saved = {}
         self.current: int | None = saved.get("recipe_id")
         self.player: str | None = saved.get("entity_id")
+        # Fotky dlaždic nahrané do HA: {id receptu: [verze fotky, id obrázku]}
+        self.images: dict[str, list] = saved.get("images") or {}
+        self._base_url = ""
+        self._upload_failed = False   # HA obrázky nepřijímá -- do dalšího spojení nezkoušet
 
     def _save(self) -> None:
         tmp = self._state_file + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"recipe_id": self.current, "entity_id": self.player}, fh)
+            json.dump({"recipe_id": self.current, "entity_id": self.player,
+                       "images": self.images}, fh)
         os.replace(tmp, self._state_file)
 
     def start(self) -> None:
@@ -318,18 +380,56 @@ class Display:
                 pass
         return placeholder(r["name"], r["category"])
 
+    def _tile_image(self, r: dict) -> str:
+        """Obrázek dlaždice: fotka nahraná do HA (odkaz), jinak barevný obrázek.
+
+        Fotka je v dashboardu i několikrát (vše, kategorie, písmeno) -- jako
+        odkaz to nevadí, jako data: URL by dashboard nafoukla na megabajty.
+        """
+        if not r["photo"]:
+            return placeholder(r["name"], r["category"])
+        key = str(r["id"])
+        have = self.images.get(key)
+        if not have or have[0] != r["photo"]:
+            if self._upload_failed:
+                return self._image(r)
+            try:
+                with open(self.data.photo_path(r["id"], True), "rb") as fh:
+                    image_id = ha.upload_image(fh.read(), f"mat-cooking-{r['id']}.jpg")
+            except (OSError, ha.HAError) as exc:
+                print(f"  Displej: fotky nejde nahrát do HA ({exc}), dlaždice je mají "
+                      "přímo v dashboardu.", flush=True)
+                self._upload_failed = True
+                return self._image(r)
+            if have:
+                self._delete_image(have[1])
+            self.images[key] = have = [r["photo"], image_id]
+            self._save()
+        if not self._base_url:
+            self._base_url = ha.external_url()
+        return f"{self._base_url}/api/image/serve/{have[1]}/512x512"
+
+    def _delete_image(self, image_id: str) -> None:
+        if self._cmd:
+            try:
+                self._cmd({"type": "image/delete", "image_id": image_id})
+            except ha.HAError:
+                pass        # už smazaný -- nevadí
+
     def _dashboard_config(self) -> dict:
         planned = {r["id"]: r["portions"] for r in self.data.plan_rows()[0]}
         recipes = {r["id"]: r for r in self.data.list_recipes()}
-        tiles_planned, tiles_rest = [], []
-        for label, rid in self._options():
-            r = recipes[rid]
-            if rid in planned:
-                tiles_planned.append(_tile(label, self._image(r),
-                                           f"{label} · {_portions_text(int(planned[rid]))}"))
-            else:
-                tiles_rest.append(_tile(label, self._image(r), label))
-        return dashboard_config(tiles_planned, tiles_rest)
+        items = [{"label": label, "image": self._tile_image(recipes[rid]),
+                  "category": recipes[rid]["category"], "planned": rid in planned,
+                  "title": (f"{label} · {_portions_text(int(planned[rid]))}"
+                            if rid in planned else label)}
+                 for label, rid in self._options()]
+        # Fotky smazaných receptů (nebo smazané fotky) z HA pryč
+        keep = {str(rid) for rid, r in recipes.items() if r["photo"]}
+        for key in [k for k in self.images if k not in keep]:
+            self._delete_image(self.images.pop(key)[1])
+            self._save()
+        return dashboard_config(items)
 
     def _sync_all(self) -> None:
         """Výběr receptů, dashboard a recept na displeji podle aktuálních dat.
@@ -463,6 +563,8 @@ class Display:
                 self._cmd = None
                 self._photo_key = None
                 self._dashboard = None
+                self._upload_failed = False
+                self._base_url = ""
             delay = 5 if time.monotonic() - started > 120 else min(delay * 2, 120)
             time.sleep(delay)
 

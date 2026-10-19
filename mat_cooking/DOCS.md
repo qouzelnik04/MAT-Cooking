@@ -10,7 +10,8 @@ Otevři **MAT-Cooking** v postranním panelu HA.
   zaškrtneš, co máš doma, a zbytek pošleš do nákupního seznamu (seznamy
   úkolů HA, např. Albert, Billa). Plán je společný pro celou domácnost.
 - **Recepty** — přidávání receptů se surovinami (množství + jednotka +
-  surovina), postupem a poznámkami. V detailu receptu jde přepočítat počet
+  surovina), postupem a poznámkami. Pořadí surovin změníš přetažením za
+  úchyt ⠿ (myší i prstem). V detailu receptu jde přepočítat počet
   porcí tlačítky −/+.
 - **Fotky a doba přípravy** — u receptu v editoru. Fotku prohlížeč před
   nahráním zmenší (asi 200 kB), takže místo na HA nezabere.
@@ -19,7 +20,8 @@ Otevři **MAT-Cooking** v postranním panelu HA.
   se přeskočí).
 - **Na displej** — v detailu receptu pošleš recept (s nastavenými porcemi)
   na displej s Google Cast, např. Google Nest Hub. Na displeji jde vybírat
-  recepty z mřížky s fotkami, měnit porce a velikost písma. Dashboard
+  recepty z mřížky s fotkami (filtr podle kategorie a počátečního písmene),
+  měnit porce a velikost písma. Dashboard
   *MAT-Cooking displej* a pomocníky *MAT-Cooking recept / porce / písmo*
   si appka v HA vytvoří a udržuje sama — nemaž je ani je ručně neupravuj.
   HA musí mít nastavenou internetovou adresu.

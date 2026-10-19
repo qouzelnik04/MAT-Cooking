@@ -291,6 +291,45 @@ async function editView(id) {
   const notes = el('textarea', { style: 'min-height:80px' }, r.notes);
   const rows = el('div', {});
 
+  /* Přetažení řádku suroviny za úchyt ⠿ -- myší i prstem (pointer events).
+     Řádek se během tažení rovnou přesouvá na místo, nad kterým je ukazatel. */
+  const drag = (handle, row) => {
+    handle.addEventListener('pointerdown', (ev) => {
+      if (ev.button > 0) return;
+      ev.preventDefault();
+      try { handle.setPointerCapture(ev.pointerId); } catch (e) { /* bez zachycení to jde taky */ }
+      row.classList.add('dragging');
+      const move = (e) => {
+        const next = [...rows.children].find((x) => x !== row
+          && e.clientY < x.getBoundingClientRect().top + x.getBoundingClientRect().height / 2);
+        if (next) {
+          if (next !== row.nextElementSibling) rows.insertBefore(row, next);
+        } else if (rows.lastElementChild !== row) rows.append(row);
+        if (e.clientY < 60) window.scrollBy(0, -12);
+        else if (e.clientY > window.innerHeight - 60) window.scrollBy(0, 12);
+      };
+      const end = () => {
+        row.classList.remove('dragging');
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', end);
+        handle.removeEventListener('pointercancel', end);
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', end);
+      handle.addEventListener('pointercancel', end);
+    });
+    // Klávesnice: šipky nahoru / dolů
+    handle.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowUp' && row.previousElementSibling) {
+        rows.insertBefore(row, row.previousElementSibling);
+      } else if (e.key === 'ArrowDown' && row.nextElementSibling) {
+        rows.insertBefore(row.nextElementSibling, row);
+      } else return;
+      e.preventDefault();
+      handle.focus();
+    });
+  };
+
   const addRow = (it = {}) => {
     const amount = el('input', { value: it.amount || '', placeholder: 'kolik', inputmode: 'decimal' });
     const unit = el('select', {}, el('option', { value: '' }, '—'),
@@ -299,13 +338,15 @@ async function editView(id) {
       list: 'ingredient-names' });
     const note = el('input', { class: 'note', value: it.note || '',
       placeholder: 'poznámka (nepovinné, např. nakrájená)' });
+    const handle = el('button', { class: 'btn small handle', type: 'button',
+      title: 'Přetáhni nahoru nebo dolů (nebo šipky na klávesnici)',
+      'aria-label': 'přesunout surovinu' }, '⠿');
     const row = el('div', { class: 'item-row' }, amount, unit, ing,
-      el('div', { class: 'tools' },
-        el('button', { class: 'btn small', type: 'button', title: 'nahoru',
-          onclick: () => row.previousElementSibling && rows.insertBefore(row, row.previousElementSibling) }, '↑'),
+      el('div', { class: 'tools' }, handle,
         el('button', { class: 'btn small danger', type: 'button', title: 'odebrat',
           onclick: () => row.remove() }, '✕')),
       note);
+    drag(handle, row);
     row.read = () => ({ amount: amount.value, unit: unit.value, ingredient: ing.value, note: note.value });
     rows.append(row);
     return ing;
