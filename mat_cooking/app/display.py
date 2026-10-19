@@ -129,6 +129,11 @@ def placeholder(name: str, category: str) -> str:
 # ----------------------------------------------------------------------
 # Dashboard -- jeden pohled: mřížka receptů, nebo recept (podle SELECT)
 # ----------------------------------------------------------------------
+# Dlouhý a dvojitý dotyk nic nedělá: z displeje v kuchyni se nemá jít
+# do detailů a nastavení entit HA, jen k receptům.
+NO_ACTIONS = {"hold_action": {"action": "none"}, "double_tap_action": {"action": "none"}}
+
+
 def _act(service: str, entity: str, **data) -> dict:
     out = {"action": "perform-action", "perform_action": service, "target": {"entity_id": entity}}
     if data:
@@ -146,13 +151,13 @@ def _md(content: str, text_only: bool = False) -> dict:
 def _button(name: str, icon: str, tap: dict, small: bool = False) -> dict:
     return {"type": "button", "name": name, "icon": icon,
             "icon_height": "22px" if small else "32px",
-            "show_state": False, "tap_action": tap, "hold_action": {"action": "none"}}
+            "show_state": False, "tap_action": tap, **NO_ACTIONS}
 
 
 def _tile(label: str, image: str, title: str) -> dict:
     return {"type": "picture-glance", "title": title, "image": image, "entities": [],
             "aspect_ratio": "4:3",
-            "tap_action": _act("input_select.select_option", SELECT, option=label)}
+            "tap_action": _act("input_select.select_option", SELECT, option=label), **NO_ACTIONS}
 
 
 def _navigate(view: str) -> dict:
@@ -208,7 +213,7 @@ def dashboard_config(items: list[dict]) -> dict:
             out.append({"type": "grid", "columns": min(len(letters), 14), "square": False,
                         "cards": [{"type": "button", "name": mark(ch, "p:" + ch),
                                    "show_icon": False, "tap_action": _navigate(_letter_view(ch)),
-                                   "hold_action": {"action": "none"}} for ch in letters]})
+                                   **NO_ACTIONS} for ch in letters]})
         return out
 
     def grid(tiles: list[dict]) -> dict:
@@ -237,6 +242,7 @@ def dashboard_config(items: list[dict]) -> dict:
         _button("Recepty", "mdi:view-grid-outline", _navigate(PICKER_VIEW)),
         {"type": "tile", "entity": NUMBER, "name": "Porce", "icon": "mdi:account-group",
          "hide_state": True, "tap_action": {"action": "none"},
+         "icon_tap_action": {"action": "none"}, **NO_ACTIONS,
          "features": [{"type": "numeric-input", "style": "buttons"}]},
         _button("Menší písmo", "mdi:format-font-size-decrease",
                 _act("input_select.select_previous", SIZE, cycle=False)),
