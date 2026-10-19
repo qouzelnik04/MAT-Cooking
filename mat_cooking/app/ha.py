@@ -90,12 +90,8 @@ def update_item(entity_id: str, item: dict, text: str, description: str) -> None
 
 
 # ----------------------------------------------------------------------
-# Recept na displeji (Google Nest Hub přes Google Cast)
+# Recept na displeji (viz display.py)
 # ----------------------------------------------------------------------
-DISPLAY_ENTITY = "sensor.mat_cooking_recept"
-DASHBOARD_PATH = "mat-cooking-displej"
-
-
 def media_players() -> list[dict]:
     """Přehrávače v HA, na které jde promítat: [{entity_id, name}].
 
@@ -108,13 +104,26 @@ def media_players() -> list[dict]:
     return sorted(out, key=lambda x: x["name"].lower())
 
 
-def show_recipe(entity_id: str, view_path: str, name: str, attributes: dict) -> None:
-    """Zapíše recept do entity a promítne na displej dashboard, který ji ukazuje."""
-    if not entity_id.startswith("media_player."):
-        raise HAError("Neplatný displej.")
-    # Stav entity smí mít nejvýš 255 znaků -- název receptu se vejde vždy
-    _call("POST", f"/states/{DISPLAY_ENTITY}",
-          {"state": name[:255], "attributes": {"friendly_name": "MAT-Cooking recept",
-                                               "icon": "mdi:chef-hat", **attributes}})
-    _call("POST", "/services/cast/show_lovelace_view",
-          {"entity_id": entity_id, "dashboard_path": DASHBOARD_PATH, "view_path": view_path})
+def get_state(entity_id: str) -> dict | None:
+    """Stav entity; None, když entita (zatím) neexistuje."""
+    try:
+        return _call("GET", f"/states/{entity_id}")
+    except HAError as exc:
+        if isinstance(exc.__cause__, urllib.error.HTTPError) and exc.__cause__.code == 404:
+            return None
+        raise
+
+
+def set_state(entity_id: str, state: str, attributes: dict) -> None:
+    _call("POST", f"/states/{entity_id}", {"state": state, "attributes": attributes})
+
+
+def call_service(domain: str, service: str, data: dict) -> None:
+    _call("POST", f"/services/{domain}/{service}", data)
+
+
+def ws_url() -> str:
+    """Websocket API HA: přes Supervisor /core/websocket, jinak <url>/websocket."""
+    if BASE.endswith("/core/api"):
+        return BASE[:-len("/api")] + "/websocket"
+    return BASE + "/websocket"

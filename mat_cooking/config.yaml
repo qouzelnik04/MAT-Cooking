@@ -1,7 +1,7 @@
 # HA nabídne aktualizaci, jen když se tu zvýší verze. Appka si verzi
 # čte odsud, takže je na jednom místě.
 name: MAT-Cooking
-version: "0.5.1"
+version: "0.6.0"
 slug: mat_cooking
 description: Recepty a plán vaření -- chybějící suroviny rovnou do nákupního seznamu HA
 url: https://github.com/qouzelnik04/MAT-Cooking
@@ -19,7 +19,8 @@ panel_title: MAT-Cooking
 # Recepty jsou společné pro celou domácnost -- panel vidí i uživatelé bez admin práv
 panel_admin: false
 
-# Zápis chybějících surovin do seznamů úkolů HA (nákupní seznamy)
+# Zápis chybějících surovin do seznamů úkolů HA (nákupní seznamy), recept na
+# displej a pomocníci pro jeho ovládání (input_select, input_number)
 homeassistant_api: true
 
 # Databáze (SQLite) je v /data. Při záloze se add-on na chvíli zastaví,

@@ -31,9 +31,10 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import APP_NAME, APP_VERSION, ha
+from .display import Display, dashboard_yaml
 from .db import CATEGORIES, DB, InputError
 from .plan import item_text, parse_item, shopping_list
-from .units import UNITS, fmt, parse_amount
+from .units import UNITS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_DIR = os.path.join(ROOT, "web")
@@ -42,6 +43,7 @@ ALLOW_ONLY = {ip.strip() for ip in (os.environ.get("MAT_ALLOW_ONLY") or "").spli
               if ip.strip()}
 
 DATA: DB | None = None
+DISPLAY: Display | None = None
 # Odeslání do nákupního seznamu najednou jen jedno -- dva lidé ve stejnou
 # chvíli by jinak poslali stejný přírůstek dvakrát.
 SEND_LOCK = threading.Lock()
@@ -111,7 +113,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not ha.available():
                     return self._json({"available": False, "displays": []})
                 return self._json({"available": True, "displays": ha.media_players(),
-                                   "dashboard": DISPLAY_DASHBOARD})
+                                   "dashboard": dashboard_yaml(), **DISPLAY.status()})
             return self._err(404, "Taková adresa tu není.")
         except ha.HAError as exc:
             return self._err(502, str(exc))
@@ -159,7 +161,9 @@ class Handler(BaseHTTPRequestHandler):
                 DATA.clear_plan()
                 return self._json(_plan())
             if path == "/api/display":
-                return self._json(_display(body))
+                DISPLAY.show(str(body.get("entity_id") or ""), int(body.get("recipe_id") or 0),
+                             body.get("portions"), str(body.get("size") or ""))
+                return self._json({"ok": True})
             if path == "/api/plan/send":
                 with SEND_LOCK:
                     return self._json(_send(str(body.get("entity_id") or "")))
@@ -171,6 +175,10 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:            # noqa: BLE001
             traceback.print_exc()
             return self._err(500, f"Chyba na serveru: {exc}")
+        finally:
+            if path.startswith(("/api/recipes", "/api/import", "/api/plan/portions",
+                                "/api/plan/clear", "/api/ingredients")):
+                DISPLAY.request_sync()  # výběr receptů na displeji podle nového stavu
 
     # ------------------------------------------------------------------
     def _index(self) -> None:
@@ -300,95 +308,6 @@ def _import(body: dict) -> dict:
     return {"added": [rec["name"] for _, rec in added], "skipped": skipped}
 
 
-# Dashboard v HA, který appka promítá na displej. Uživatel ho jednou vytvoří
-# (Nastavení -> Dashboardy -> Přidat -> URL "mat-cooking-displej" -> Upravit
-# -> Editor kódu) a vloží ho. Appka ho ukazuje ke zkopírování.
-# Tři pohledy = tři velikosti písma; na displeji se přepínají tlačítky A / A+ / A++.
-# Větší písmo = řádky jako nadpisy markdownu (jiný způsob HA bez doplňků nemá).
-DISPLAY_SIZES = {  # klíč z appky -> (cesta pohledu, tlačítko, předpona řádku)
-    "normalni": ("recept", "A", "- "),
-    "velke": ("recept-velke", "A+", "### "),
-    "obri": ("recept-obri", "A++", "## "),
-}
-
-
-def _dashboard_yaml() -> str:
-    attr = "state_attr('sensor.mat_cooking_recept', '{}')"
-    out = ["title: MAT-Cooking displej", "views:"]
-    for key, (path, label, prefix) in DISPLAY_SIZES.items():
-        buttons = []
-        for path2, label2, _ in DISPLAY_SIZES.values():
-            buttons += [
-                "              - type: button",
-                f"                name: \"{'● ' if path2 == path else ''}{label2}\"",
-                "                show_icon: false",
-                "                tap_action:",
-                "                  action: navigate",
-                f"                  navigation_path: /mat-cooking-displej/{path2}"]
-        step = "{{ loop.index }}. " if key == "normalni" else prefix + "{{ loop.index }}. "
-        out += [
-            f"  - title: Recept {label}",
-            f"    path: {path}",
-            "    type: panel",
-            "    cards:",
-            "      - type: vertical-stack",
-            "        cards:",
-            "          - type: horizontal-stack",
-            "            cards:",
-            *buttons,
-            "          - type: markdown",
-            "            content: |",
-            "              # {{ states('sensor.mat_cooking_recept') }}",
-            f"              **{{{{ {attr.format('info')} }}}}**",
-            "",
-            f"              {{% for s in {attr.format('suroviny')} or [] -%}}",
-            f"              {prefix}{{{{ s }}}}",
-            "              {% endfor %}",
-            "          - type: markdown",
-            "            content: |",
-            "              ## Postup",
-            "",
-            f"              {{% for s in {attr.format('postup')} or [] -%}}",
-            f"              {step}{{{{ s }}}}",
-            "              {% endfor %}",
-        ]
-    return "\n".join(out) + "\n"
-
-
-DISPLAY_DASHBOARD = _dashboard_yaml()
-
-
-def _display(body: dict) -> dict:
-    """Recept s danými porcemi na displej (Nest Hub) přes dashboard v HA."""
-    if not ha.available():
-        raise InputError("Appka neběží v Home Assistantu -- na displej nejde poslat.")
-    entity_id = str(body.get("entity_id") or "")
-    if not entity_id.startswith("media_player."):
-        raise InputError("Vyber displej.")
-    r = DATA.get_recipe(int(body.get("recipe_id") or 0))
-    if not r:
-        raise InputError("Recept neexistuje.")
-    portions = max(1, int(body.get("portions") or r["servings"]))
-    factor = Decimal(portions) / Decimal(r["servings"] or 1)
-    items = []
-    for it in r["items"]:
-        amount = parse_amount(it["amount"])
-        qty = (f'{fmt(amount * factor).replace(".", ",")} {it["unit"]}'.strip()
-               if amount is not None else "")
-        items.append(" ".join(x for x in (qty, it["ingredient"],
-                                          f'({it["note"]})' if it["note"] else "") if x))
-    info = f"{portions} {'porce' if portions < 5 else 'porcí'}"
-    if r["minutes"]:
-        info += f' · {r["minutes"]} min'
-    view = DISPLAY_SIZES.get(str(body.get("size") or ""), DISPLAY_SIZES["normalni"])[0]
-    ha.show_recipe(entity_id, view, r["name"], {
-        "porce": portions, "info": info, "suroviny": items,
-        "postup": [s.strip() for s in r["steps"].splitlines() if s.strip()],
-        "poznamky": r["notes"],
-    })
-    return {"ok": True}
-
-
 def _plan() -> dict:
     recipes, items, have, sent = DATA.plan_rows()
     return {"recipes": recipes, "shopping": shopping_list(recipes, items, have, sent),
@@ -454,7 +373,7 @@ def _free_port(preferred: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    global DATA, PORT
+    global DATA, DISPLAY, PORT
     ap = argparse.ArgumentParser(description=f"{APP_NAME} -- recepty a plán vaření")
     ap.add_argument("--data", default=os.environ.get("MAT_DATA") or
                     os.path.join(ROOT, "..", "devdata"),
@@ -464,6 +383,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     DATA = DB(os.path.abspath(args.data))
+    DISPLAY = Display(DATA)
     if args.port:
         PORT = args.port
     elif not ALLOW_ONLY:
@@ -477,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
 
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     srv.daemon_threads = True
+    DISPLAY.start()
     if not args.bez_prohlizece:
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()
     try:

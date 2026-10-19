@@ -247,12 +247,16 @@ function displayBox(r, getPortions) {
     const yaml = el('pre', { class: 'yaml' }, res.dashboard);
     box.replaceChildren(
       el('div', { class: 'row' }, select, size, send),
+      res.error && !res.controls ? el('p', { class: 'muted small' },
+        `Ovládání přímo z displeje (◀ ▶, − +) zatím nejede: ${res.error}`) : null,
       el('details', { class: 'small', style: 'margin-top:8px' },
         el('summary', { class: 'muted' }, 'Jak displej nastavit (jednou)'),
         el('ol', { class: 'small' },
           el('li', {}, 'V HA: Nastavení → Dashboardy → Přidat dashboard → „Nový dashboard od začátku“, '
             + 'název MAT-Cooking displej, URL ', el('code', {}, 'mat-cooking-displej'), '.'),
-          el('li', {}, 'Otevři ho → tužka (Upravit) → ⋮ → Editor kódu → vlož text níže → Uložit.'),
+          el('li', {}, 'Otevři ho → tužka (Edit) → ⋮ → Raw configuration editor (Editor kódu) → '
+            + 'Ctrl+A, smazat, vložit text níže → Save → Done. Po aktualizaci appky vlož text znovu, '
+            + 'může být nový.'),
           el('li', {}, 'HA musí mít nastavenou internetovou adresu (Nastavení → Systém → Síť), '
             + 'u tebe https://ha.mat-home.cz — displej si dashboard načítá přes ni.')),
         yaml,

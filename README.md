@@ -27,12 +27,19 @@ je.
 
 ## Recept na displeji
 
-Tlačítko **📺 Na displej** v detailu receptu zapíše recept do entity
-`sensor.mat_cooking_recept` (název, porce, přepočtené suroviny, postup)
+Tlačítko **📺 Na displej** v detailu receptu zapíše recept do entit
+`sensor.mat_cooking_recept` (název, porce, přepočtené suroviny, postup,
+poznámky) a `sensor.mat_cooking_recept_foto` (náhled fotky jako data: URL)
 a službou `cast.show_lovelace_view` promítne na zvolený `media_player`
-dashboard `mat-cooking-displej`, který tu entitu ukazuje. Dashboard má tři pohledy (velikosti písma), na displeji se přepínají tlačítky A / A+ / A++. YAML dashboardu je
-v `app/main.py` (`DISPLAY_DASHBOARD`) a appka ho ukazuje ke zkopírování.
-Entita není trvalá -- po restartu HA zmizí do dalšího poslání receptu.
+dashboard `mat-cooking-displej`. YAML dashboardu je v `app/display.py`
+(`dashboard_yaml`) a appka ho ukazuje ke zkopírování.
+
+Ovládání z displeje: appka si přes websocket API HA sama vytvoří pomocníky
+`input_select.mat_cooking_recept` (recepty, naplánované první) a
+`input_number.mat_cooking_porce` a sleduje jejich změny. Tlačítka na
+dashboardu (◀ ▶ recept, − + porce, A / A+ / A++ písmo) je přepínají a appka
+recept hned překreslí; po přepnutí receptu nastaví porce z plánu, jinak
+výchozí. Po restartu HA se appka znovu připojí a recept obnoví.
 
 ## Vývoj na notebooku
 
@@ -47,7 +54,7 @@ nic se neinstaluje.
 | 1 | Recepty, katalog surovin, přepočet porcí | hotovo |
 | 2 | Plán vaření: výběr receptů a porcí, sečtení surovin, „mám doma“, odeslání do nákupního seznamu HA | hotovo |
 | 2b | Odkaz z plánu na recept s naplánovanými porcemi, doba přípravy, fotky, export/import receptů | hotovo |
-| 2c | Recept na displej (Google Nest Hub přes Cast), velikost písma A / A+ / A++ | hotovo |
+| 2c | Recept na displej (Google Nest Hub přes Cast), velikost písma, fotka a poznámky, výběr receptu a porcí přímo na displeji | hotovo |
 | 3 | Lednice a mrazák, upozornění | |
 
 ## Kde co je
@@ -62,7 +69,9 @@ mat_cooking/
     db.py                  SQLite: recepty, suroviny, migrace schématu
     units.py               jednotky, převody g/kg a ml/l, parsování množství
     plan.py                plán -> sečtený nákupní seznam (kusy nahoru)
-    ha.py                  seznamy úkolů v HA (čtení, přidávání položek)
+    ha.py                  REST API HA (seznamy úkolů, stavy entit, služby)
+    display.py             recept na displej (dashboard, pomocníci, ovládání z displeje)
+    ws.py                  websocket klient pro HA (jen standardní knihovna)
   web/                     UI (vanilla JS, mobil na prvním místě)
 START.bat                  lokální spuštění
 ```

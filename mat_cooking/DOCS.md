@@ -21,6 +21,9 @@ Otevři **MAT-Cooking** v postranním panelu HA.
   na displej s Google Cast, např. Google Nest Hub. Jednou je potřeba vytvořit
   dashboard `mat-cooking-displej` — návod i text ke zkopírování je přímo
   v appce pod tlačítkem. HA musí mít nastavenou internetovou adresu.
+  Na displeji jde tlačítky přepínat recept (◀ ▶), porce (− +) a velikost
+  písma (A / A+ / A++). Appka si k tomu v HA sama vytvoří pomocníky
+  *MAT-Cooking recept* a *MAT-Cooking porce* — nemaž je.
 - **Suroviny** — katalog všech surovin. Když stejnou věc máš pod dvěma názvy,
   přejmenuj jednu na druhou a sloučí se.
 
